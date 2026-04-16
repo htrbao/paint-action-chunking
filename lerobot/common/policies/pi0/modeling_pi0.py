@@ -442,8 +442,7 @@ class PI0Policy(PreTrainedPolicy):
         images = []
         img_masks = []
 
-        # present_img_keys = [key for key in self.config.image_features if key in batch and "depth" not in key and "mask" not in key]
-        present_img_keys = ["left_image","right_image", "wrist_image"]
+        present_img_keys = [key for key in self.config.image_features if key in batch and "depth" not in key and "mask" not in key]
         missing_img_keys = [key for key in self.config.image_features if key not in batch]
 
         if len(present_img_keys) == 0:
@@ -469,13 +468,13 @@ class PI0Policy(PreTrainedPolicy):
 
         # Create image features not present in the batch
         # as fully 0 padded images.
-        for num_empty_cameras in range(len(missing_img_keys)):
-            if num_empty_cameras >= self.config.empty_cameras:
-                break
-            img = torch.ones_like(img) * -1
-            mask = torch.zeros_like(mask)
-            images.append(img)
-            img_masks.append(mask)
+        # for num_empty_cameras in range(len(missing_img_keys)):
+        #     if num_empty_cameras >= self.config.empty_cameras:
+        #         break
+        #     img = torch.ones_like(img) * -1
+        #     mask = torch.zeros_like(mask)
+        #     images.append(img)
+        #     img_masks.append(mask)
 
         return images, img_masks
 
