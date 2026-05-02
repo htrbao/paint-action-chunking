@@ -542,6 +542,91 @@ class FlowmatchingActionHead(nn.Module):
             x_t = prev_action_chunk * weights[:, None] + x_t * (1 - weights[:, None])
             print("AFTER ASSIGN: ", (x_t[:,:inference_delay,:actual_action_dim] - prev_action_chunk[:,:inference_delay,:actual_action_dim]).abs().mean())
         return BatchFeature(data={"action_pred": x_t})
+    
+    @torch.no_grad()
+    def get_repaint_action(
+        self,
+        action_input: BatchFeature,
+        backbone_output: BatchFeature,
+        prev_action_chunk: torch.Tensor,    # [B, H, action_dim]
+        inference_delay: int,
+    ) -> BatchFeature:
+        
+        backbone_output = self.process_backbone_output(backbone_output)
+
+        # Get vision and language embeddings.
+        vl_embs      = backbone_output.backbone_features
+        embodiment_id = action_input.embodiment_id
+
+        # Embed state.
+        state_features = self.state_encoder(action_input.state, embodiment_id)
+
+        # Set initial actions as the sampled noise.
+        batch_size = vl_embs.shape[0]
+        device     = vl_embs.device
+        dtype      = vl_embs.dtype
+        d          = inference_delay
+        dt         = 1.0 / self.num_inference_timesteps
+
+        # prefix_mask[b, i, 0] = True iff i < d  →  broadcastable over [B, H, D]
+        prefix_mask = (
+            torch.arange(self.config.action_horizon, device=device)
+            .unsqueeze(0).unsqueeze(-1) < d
+        )  # [1, H, 1]
+
+        # ── shared denoising step ─────────────────────────────────────────────
+        def model_velocity(actions: torch.Tensor, t: int) -> torch.Tensor:
+            """One forward pass of the denoiser at step t. Returns predicted velocity."""
+            t_cont        = t / float(self.num_inference_timesteps)
+            t_discretized = int(t_cont * self.num_timestep_buckets)
+            timesteps     = torch.full((batch_size,), t_discretized, device=device)
+
+            action_features = self.action_encoder(actions, timesteps, embodiment_id)
+            if self.config.add_pos_embed:
+                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
+                action_features = action_features + self.position_embedding(pos_ids).unsqueeze(0)
+
+            future_tokens = self.future_tokens.weight.unsqueeze(0).expand(batch_size, -1, -1)
+            sa_embs       = torch.cat((state_features, future_tokens, action_features), dim=1)
+
+            model_output  = self.model(
+                hidden_states=sa_embs,
+                encoder_hidden_states=vl_embs,
+                timestep=timesteps,
+            )
+            return self.action_decoder(model_output, embodiment_id)[:, -self.action_horizon:]
+
+        # ── Step 1: naive forward pass ───────────────────────────────────────
+        x_0_free = torch.randn(
+            batch_size, self.config.action_horizon, self.config.action_dim,
+            dtype=dtype, device=device,
+        )
+        x = x_0_free.clone()
+        for t in range(self.num_inference_timesteps):
+            x = x + dt * model_velocity(x, t)
+        x_1_naive = x
+
+        # ── Step 2: construct inversion target ────────────────────────────────
+        x_1_target = torch.where(prefix_mask, prev_action_chunk, x_1_naive)
+
+        # ── Step 3: backward Euler inversion ─────────────────────────────────
+        x = x_1_target.clone()
+        for t in reversed(range(self.num_inference_timesteps)):
+            x = x - dt * model_velocity(x, t)
+        x_0_star = x
+
+        # ── Step 4: Mao re-painting ───────────────────────────────────────────
+        x_0_repaint = torch.where(prefix_mask, x_0_star, x_0_free)
+
+        # ── Step 5: final forward pass ────────────────────────────────────────
+        x = x_0_repaint.clone()
+        for t in range(self.num_inference_timesteps):
+            x = x + dt * model_velocity(x, t)
+        x_1_final = x
+
+        return BatchFeature(data={
+            "action_pred": x_1_final,
+        })
 
     @property
     def device(self):
