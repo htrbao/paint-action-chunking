@@ -51,10 +51,12 @@ policy = Pi0Policy.from_pretrained("lerobot/pi0")
 
 import math
 from collections import deque
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
+from typing_extensions import Unpack
 from transformers import AutoTokenizer
 
 from lerobot.common.constants import ACTION, OBS_STATE
@@ -65,10 +67,18 @@ from lerobot.common.policies.pi0.paligemma_with_expert import (
     PaliGemmaWithExpertModel,
 )
 from lerobot.common.policies.pretrained import PreTrainedPolicy
+from lerobot.common.policies.rtc.modeling_rtc import RTCProcessor
 from lerobot.common.utils.utils import get_safe_dtype
 
 from PIL import Image
 import numpy as np
+
+
+class ActionSelectKwargs(TypedDict, total=False):
+    inference_delay: int | None
+    prev_chunk_left_over: Tensor | None
+    execution_horizon: int | None
+
 
 def create_sinusoidal_pos_embedding(
     time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu"
@@ -309,7 +319,8 @@ class PI0Policy(PreTrainedPolicy):
         )
         self.language_tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224", local_files_ony=False)
         # self.language_tokenizer = AutoTokenizer.from_pretrained("/projects/extern/kisski/kisski-umg-fairpact-2/dir.project/VLA/hf_cache/hub/models--google--paligemma-3b-pt-224/snapshots/35e4f46485b4d07967e7e9935bc3786aad50687c", local_files_ony=True)
-        self.model = PI0FlowMatching(config)
+        self.init_rtc_processor()
+        self.model = PI0FlowMatching(config, rtc_processor=self.rtc_processor)
 
         self.reset()
 
@@ -317,22 +328,42 @@ class PI0Policy(PreTrainedPolicy):
         """This should be called whenever the environment is reset."""
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
+    def init_rtc_processor(self):
+        """Initialize RTC processor if RTC is enabled in config."""
+        self.rtc_processor = None
+
+        # Create processor if config provided
+        # If RTC is not enabled - we can still track the denoising data
+        if self.config.rtc_config is not None:
+            self.rtc_processor = RTCProcessor(self.config.rtc_config)
+
+            model_value = getattr(self, "model", None)
+            if model_value is not None:
+                model_value.rtc_processor = self.rtc_processor
+
+    def _rtc_enabled(self) -> bool:
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
     def get_optim_params(self) -> dict:
         return self.parameters()
 
     @torch.no_grad
-    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         raise NotImplementedError("Currently not implemented for PI0")
 
     @torch.no_grad
-    def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None, **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Select a single action given environment observations.
 
         This method wraps `select_actions` in order to return one action at a time for execution in the
         environment. It works by managing the actions in a queue and only calling `select_actions` when the
         queue is empty.
         """
+        assert not self._rtc_enabled(), (
+            "RTC is not supported for select_action, use it with predict_action_chunk"
+        )
+
         self.eval()
 
         if self.config.adapt_to_pi_aloha:
@@ -348,7 +379,7 @@ class PI0Policy(PreTrainedPolicy):
             lang_tokens, lang_masks = self.prepare_language(batch)
 
             actions = self.model.sample_actions(
-                images, img_masks, lang_tokens, lang_masks, state, noise=noise
+                images, img_masks, lang_tokens, lang_masks, state, noise=noise, **kwargs
             )
 
             # Unpad actions
@@ -609,9 +640,10 @@ class PI0FlowMatching(nn.Module):
     └──────────────────────────────┘
     """
 
-    def __init__(self, config):
+    def __init__(self, config, rtc_processor: RTCProcessor | None = None):
         super().__init__()
         self.config = config
+        self.rtc_processor = rtc_processor
 
         paligemma_with_export_config = PaliGemmaWithExpertConfig(
             freeze_vision_encoder=self.config.freeze_vision_encoder,
@@ -797,7 +829,7 @@ class PI0FlowMatching(nn.Module):
         losses = F.mse_loss(u_t, v_t, reduction="none")
         return losses
 
-    def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None) -> Tensor:
+    def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None, **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = state.shape[0]
         device = state.device
@@ -829,16 +861,41 @@ class PI0FlowMatching(nn.Module):
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
-                state,
-                prefix_pad_masks,
-                past_key_values,
-                x_t,
-                expanded_time,
-            )
+
+            # Define a closure function to properly capture expanded_time
+            # This avoids the lambda expression (E731) and loop variable binding (B023) issues
+            def denoise_step_partial_call(input_x_t, current_timestep=expanded_time):
+                return self.denoise_step(
+                    state=state,
+                    prefix_pad_masks=prefix_pad_masks,
+                    past_key_values=past_key_values,
+                    x_t=input_x_t,
+                    timestep=current_timestep,
+                )
+
+            if self._rtc_enabled():
+                inference_delay = kwargs.get("inference_delay")
+                prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
+                execution_horizon = kwargs.get("execution_horizon")
+
+                v_t = self.rtc_processor.denoise_step(
+                    x_t=x_t,
+                    prev_chunk_left_over=prev_chunk_left_over,
+                    inference_delay=inference_delay,
+                    time=time,
+                    original_denoise_step_partial=denoise_step_partial_call,
+                    execution_horizon=execution_horizon,
+                )
+            else:
+                v_t = denoise_step_partial_call(x_t)
 
             # Euler step
             x_t += dt * v_t
+
+            # Record x_t and v_t after Euler step
+            if self.rtc_processor is not None and self.rtc_processor.is_debug_enabled():
+                self.rtc_processor.track(time=time, x_t=x_t, v_t=v_t)
+
             time += dt
         return x_t
 
@@ -878,3 +935,6 @@ class PI0FlowMatching(nn.Module):
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
         return v_t
+    
+    def _rtc_enabled(self):
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
