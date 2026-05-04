@@ -172,7 +172,7 @@ def calc_mse_for_overlapping_trajectory(
                     prefix_attention_schedule=prefix_attention_schedule,
                     max_guidance_weight=max_guidance_weight,
                     sigma_d_o=sigma_d_o,
-                    actual_action_dim=7
+                    actual_action_dim=14
                 )
             )
 
@@ -236,7 +236,125 @@ def calc_mse_for_overlapping_trajectory(
         }
         plot_trajectory(
             info,
-            f"eval_mse_actionmask/{save_plot_path}_{prefix_attention_schedule}_{traj_id}_{max_guidance_weight}_{sigma_d_o}.png"
+            f"eval_images/eval_rtc/{save_plot_path}_{prefix_attention_schedule}_{traj_id}_{max_guidance_weight}_{sigma_d_o}.png"
+        )
+        # plt.show()
+
+    return mse
+
+def calc_mse_for_repaint_trajectory(
+    policy: BasePolicy,
+    dataset: LeRobotSingleDataset,
+    traj_id: int,
+    modality_keys: list,
+    steps=300,
+    action_horizon=16,
+    plot=False,
+    save_plot_path=None,
+):
+    policy.reset()
+    state_joints_across_time = []
+    gt_action_across_time = []
+    pred_action_across_time = []
+    pred_action_chunk_across_time = []
+    action_chunk = None
+
+    inference_delay = 2
+    execute_horizon = 3
+    prefix_attention_horizon = action_horizon - execute_horizon
+
+
+    for step_count in range(steps):
+        data_point = dataset.get_step_data(traj_id, step_count)
+
+        # NOTE this is to get all modality keys concatenated
+        # concat_state = data_point[f"state.{modality_keys[0]}"][0]
+        # # concat_gt_action = data_point[f"action.{modality_keys[0]}"][0]
+        # concat_state = np.concatenate(
+        #     [data_point[f"state.{key}"][0] for key in modality_keys], axis=0
+        # )
+        concat_state = np.concatenate(
+            [data_point[f"state.{key}"][0] for key in modality_keys], axis=0
+        )
+        concat_gt_action = np.concatenate(
+            [data_point[f"action.{key}"][0] for key in modality_keys], axis=0
+        )
+
+        state_joints_across_time.append(concat_state)
+        gt_action_across_time.append(concat_gt_action)
+
+        if step_count % execute_horizon == 0 :
+            next_action_chunk = policy.get_action(
+                dict(
+                    observations=data_point,
+                    inference_delay=inference_delay,
+                    prefix_attention_horizon=prefix_attention_horizon,
+                    execute_horizon=execute_horizon,
+                    actual_action_dim=14
+                )
+            )
+
+            if action_chunk is None:
+                for j in range(execute_horizon):
+                    # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
+                    # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
+                    concat_pred_action = np.concatenate(
+                        [np.atleast_1d(next_action_chunk[f"action.{key}"][j]) for key in modality_keys],
+                        axis=0,
+                    )
+                    pred_action_across_time.append(concat_pred_action)
+            else:
+                for j in range(execute_horizon, execute_horizon + inference_delay, 1):
+                    # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
+                    # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
+                    concat_pred_action = np.concatenate(
+                        [np.atleast_1d(action_chunk[f"action.{key}"][j]) for key in modality_keys],
+                        axis=0,
+                    )
+                    pred_action_across_time.append(concat_pred_action)
+                for j in range(inference_delay, execute_horizon, 1):
+                    # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
+                    # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
+                    concat_pred_action = np.concatenate(
+                        [np.atleast_1d(next_action_chunk[f"action.{key}"][j]) for key in modality_keys],
+                        axis=0,
+                    )
+                    pred_action_across_time.append(concat_pred_action)
+
+            action_chunk = next_action_chunk
+
+    # plot the joints
+    state_joints_across_time = np.array(state_joints_across_time)
+    gt_action_across_time = np.array(gt_action_across_time)
+    pred_action_across_time = np.array(pred_action_across_time)[:steps]
+    assert gt_action_across_time.shape == pred_action_across_time.shape
+
+    # calc MSE across time
+    mse = np.mean((gt_action_across_time - pred_action_across_time) ** 2)
+    print("Unnormalized Action MSE across single traj:", mse)
+
+    print("state_joints vs time", state_joints_across_time.shape)
+    print("gt_action_joints vs time", gt_action_across_time.shape)
+    print("pred_action_joints vs time", pred_action_across_time.shape)
+
+    # num_of_joints = state_joints_across_time.shape[1]
+    action_dim = gt_action_across_time.shape[1]
+
+    if plot:
+        info = {
+            "state_joints_across_time": state_joints_across_time,
+            "gt_action_across_time": gt_action_across_time,
+            "pred_action_across_time": pred_action_across_time,
+            "modality_keys": modality_keys,
+            "traj_id": traj_id,
+            "mse": mse,
+            "action_dim": action_dim,
+            "action_horizon": action_horizon,
+            "steps": steps,
+        }
+        plot_trajectory(
+            info,
+            f"eval_images/eval_repaint/{save_plot_path}_{traj_id}.png"
         )
         # plt.show()
 

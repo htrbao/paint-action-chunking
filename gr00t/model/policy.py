@@ -230,7 +230,7 @@ class Gr00tPolicy(BasePolicy):
         # Create a copy to avoid mutating input
         obs_copy = observations.copy()
 
-        if self.smooth_option in ["rtc", "training-time-rtc"]:
+        if self.smooth_option in ["rtc", "training-time-rtc", "repaint-euler"]:
             inference_delay = obs_copy.get("inference_delay", None)
             prefix_attention_horizon = obs_copy.get("prefix_attention_horizon", None)
             prefix_attention_schedule = obs_copy.get("prefix_attention_schedule", None)
@@ -261,7 +261,7 @@ class Gr00tPolicy(BasePolicy):
                 obs_copy[k] = np.array(v)
 
         normalized_input = self.apply_transforms(obs_copy)
-        normalized_action = self._get_action_from_normalized_input(normalized_input) if self.smooth_option not in ["rtc", "training-time-rtc"] else self._get_realtime_action_from_normalized_input(
+        normalized_action = self._get_action_from_normalized_input(normalized_input) if self.smooth_option not in ["rtc", "training-time-rtc", "repaint-euler"] else self._get_realtime_action_from_normalized_input(
             normalized_input,
             self.prev_action_chunk,
             inference_delay,
@@ -271,7 +271,7 @@ class Gr00tPolicy(BasePolicy):
             sigma_d_o,
             actual_action_dim
         )
-        if self.smooth_option in ["rtc", "training-time-rtc"]:
+        if self.smooth_option in ["rtc", "training-time-rtc", "repaint-euler"]:
             normalized_action, self.prev_action_chunk = normalized_action        
             self.cnt += 1
             plot_trajectory(
@@ -313,15 +313,22 @@ class Gr00tPolicy(BasePolicy):
                                                    actual_action_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
         # Set up autocast context if needed
         # with torch.inference_mode(False), torch.enable_grad(), torch.autocast(device_type="cuda", dtype=COMPUTE_DTYPE):
-        with torch.autocast(device_type="cuda", dtype=COMPUTE_DTYPE):
-            model_pred, real_action = self.model.get_realtime_action(normalized_input,
-                                                            prev_action_chunk=prev_action_chunk,
-                                                            inference_delay=inference_delay,
-                                                            prefix_attention_horizon=prefix_attention_horizon,
-                                                            prefix_attention_schedule=prefix_attention_schedule,
-                                                            max_guidance_weight=max_guidance_weight,
-                                                            sigma_d_o=sigma_d_o,
-                                                            actual_action_dim=actual_action_dim)
+        if self.smooth_option in ["rtc", "training-time-rtc"]:
+            with torch.autocast(device_type="cuda", dtype=COMPUTE_DTYPE):
+                model_pred, real_action = self.model.get_realtime_action(normalized_input,
+                                                                prev_action_chunk=prev_action_chunk,
+                                                                inference_delay=inference_delay,
+                                                                prefix_attention_horizon=prefix_attention_horizon,
+                                                                prefix_attention_schedule=prefix_attention_schedule,
+                                                                max_guidance_weight=max_guidance_weight,
+                                                                sigma_d_o=sigma_d_o,
+                                                                actual_action_dim=actual_action_dim)
+        elif self.smooth_option in ["repaint-euler"]:
+            model_pred, real_action = self.model.get_repaint_action(normalized_input,
+                                                    prev_action_chunk=prev_action_chunk,
+                                                    inference_delay=inference_delay,
+                                                    prefix_attention_horizon=prefix_attention_horizon,
+                                                    actual_action_dim=actual_action_dim)
 
         normalized_action = model_pred["action_pred"].float()
         real_action = real_action["action_pred"].float()

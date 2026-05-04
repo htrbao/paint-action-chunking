@@ -214,6 +214,33 @@ class GR00T_N1_5(PreTrainedModel):
         self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
         
         return action_head_outputs, _real_action_head_outputs
+    
+    def get_repaint_action(
+        self,
+        inputs: dict,
+        prev_action_chunk: torch.Tensor | None,
+        inference_delay: int,
+        prefix_attention_horizon: int,
+        actual_action_dim: int
+    ) -> BatchFeature:
+        backbone_inputs, action_inputs = self.prepare_input(inputs)
+        # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
+        backbone_outputs = self.backbone(backbone_inputs)
+        if prev_action_chunk is None:
+            action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
+
+        else:
+            action_head_outputs = self.action_head.get_repaint_action(
+                action_inputs,
+                backbone_outputs,
+                prev_action_chunk=prev_action_chunk,
+                inference_delay=inference_delay,
+                prefix_attention_horizon=prefix_attention_horizon,
+                actual_action_dim=actual_action_dim
+            )
+        self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
+        _real_action_head_outputs = copy.deepcopy(action_head_outputs)
+        return action_head_outputs, _real_action_head_outputs
 
     def prepare_input(self, inputs) -> Tuple[BatchFeature, BatchFeature]:
         self.validate_inputs(inputs)

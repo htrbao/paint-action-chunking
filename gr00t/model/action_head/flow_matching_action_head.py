@@ -550,6 +550,9 @@ class FlowmatchingActionHead(nn.Module):
         backbone_output: BatchFeature,
         prev_action_chunk: torch.Tensor,    # [B, H, action_dim]
         inference_delay: int,
+        prefix_attention_horizon: int,
+        actual_action_dim: int,
+        use_prev_action: bool = True,
     ) -> BatchFeature:
         
         backbone_output = self.process_backbone_output(backbone_output)
@@ -584,7 +587,8 @@ class FlowmatchingActionHead(nn.Module):
             action_features = self.action_encoder(actions, timesteps, embodiment_id)
             if self.config.add_pos_embed:
                 pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
-                action_features = action_features + self.position_embedding(pos_ids).unsqueeze(0)
+                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                action_features = action_features + pos_embs
 
             future_tokens = self.future_tokens.weight.unsqueeze(0).expand(batch_size, -1, -1)
             sa_embs       = torch.cat((state_features, future_tokens, action_features), dim=1)
@@ -610,7 +614,7 @@ class FlowmatchingActionHead(nn.Module):
         x_1_target = torch.where(prefix_mask, prev_action_chunk, x_1_naive)
 
         # ── Step 3: backward Euler inversion ─────────────────────────────────
-        x = x_1_target.clone()
+        x = x_1_target.clone().to(dtype=dtype)
         for t in reversed(range(self.num_inference_timesteps)):
             x = x - dt * model_velocity(x, t)
         x_0_star = x
@@ -619,10 +623,17 @@ class FlowmatchingActionHead(nn.Module):
         x_0_repaint = torch.where(prefix_mask, x_0_star, x_0_free)
 
         # ── Step 5: final forward pass ────────────────────────────────────────
-        x = x_0_repaint.clone()
+        x = x_0_repaint.clone().to(dtype=dtype)
         for t in range(self.num_inference_timesteps):
             x = x + dt * model_velocity(x, t)
         x_1_final = x
+        print("EACH DENOISING STEP: ", (x_1_final[:,:inference_delay,:actual_action_dim] - prev_action_chunk[:,:inference_delay,:actual_action_dim]).abs().mean())
+        if use_prev_action:
+            weights = get_prefix_weights(
+                inference_delay, prefix_attention_horizon, self.config.action_horizon, "exp"
+            ).to(device)
+            x_1_final = prev_action_chunk * weights[:, None] + x_1_final * (1 - weights[:, None])
+            print("AFTER ASSIGN: ", (x_1_final[:,:inference_delay,:] - prev_action_chunk[:,:inference_delay,:]).abs().mean())
 
         return BatchFeature(data={
             "action_pred": x_1_final,
