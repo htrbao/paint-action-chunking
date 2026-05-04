@@ -103,7 +103,7 @@ class ArgsConfig:
     guidance_option: Literal["acg", "cfg", ""] = ""
     """Guidance option for the action generation. Options are 'acg' for action coherent guidance, 'cfg' for classifier-free guidance or empty string for no guidance"""
 
-    smooth_option: Literal["te", "rtc", "training-time-rtc", ""] = ""
+    smooth_option: Literal["te", "rtc", "training-time-rtc", "repaint-euler", ""] = ""
     """Smooth option for the action generation. Options are 'te' for temporal encoding, 'rtc' for real-time chunking, 'training-time-rtc' for training-time rtc or empty string for no smoothing."""
 
     denoising_steps: int = 4
