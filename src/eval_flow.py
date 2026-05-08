@@ -62,9 +62,14 @@ class RepaintingMethodV2Config:
 @dataclasses.dataclass(frozen=True)
 class TEMethodConfig:
     k: float = -0.015
-    num_queries = 8
-    ensemble_weights = jnp.exp(k * jnp.arange(num_queries))
-    ensemble_weights_cumsum = jnp.cumsum(ensemble_weights, axis=0)
+    num_queries: int = 8
+    ensemble_weights: jax.Array = dataclasses.field(init=False)
+    ensemble_weights_cumsum: jax.Array = dataclasses.field(init=False)
+
+    def __post_init__(self):
+        w = jnp.exp(self.k * jnp.arange(self.num_queries))
+        object.__setattr__(self, 'ensemble_weights', w)
+        object.__setattr__(self, 'ensemble_weights_cumsum', jnp.cumsum(w))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,7 +115,7 @@ def eval(
             next_obs, next_env_state, reward, done, info = env.step(key, env_state, action, env_params)
             return (rng, next_obs, next_env_state), (done, env_state, info)
 
-        rng, obs, env_state, action_chunk, n = carry
+        rng, obs, env_state, action_chunk, n, te_ensemble, te_counts, te_is_init = carry
         rng, key = jax.random.split(rng)
         if isinstance(config.method, NaiveMethodConfig):
             next_action_chunk = policy.action(key, obs, config.num_flow_steps)
@@ -209,7 +214,13 @@ def eval(
                 bid_weak_policy=weak_policy if config.method.bid_k is not None else None,
             )
         elif isinstance(config.method, TEMethodConfig):
-            next_action_chunk = policy.te_action(key, obs, config.num_flow_steps, config.method.num_queries, config.method.ensemble_weights, config.method.ensemble_weights_cumsum)
+            next_action_chunk, te_ensemble, te_counts, te_is_init = policy.te_action(
+                key, obs, config.num_flow_steps,
+                te_ensemble, te_counts, te_is_init,
+                config.method.num_queries,
+                config.method.ensemble_weights,
+                config.method.ensemble_weights_cumsum,
+            )
         else:
             raise ValueError(f"Unknown method: {config.method}")
 
@@ -240,17 +251,22 @@ def eval(
             step, (rng, obs, env_state), action_chunk_to_execute.transpose(1, 0, 2)
         )
         infos["match"] = prefix_match
-        return (rng, next_obs, next_env_state, next_action_chunk, next_n), (dones, env_states, infos)
+        return (rng, next_obs, next_env_state, next_action_chunk, next_n,
+                te_ensemble, te_counts, te_is_init), (dones, env_states, infos)
 
     rng, key = jax.random.split(rng)
     obs, env_state = env.reset_to_level(key, level, env_params)
     rng, key = jax.random.split(rng)
     action_chunk = policy.action(key, obs, config.num_flow_steps)  # [batch, horizon, action_dim]
     n = jnp.ones(action_chunk.shape[1], dtype=jnp.int32)
+    te_num_queries = config.method.num_queries if isinstance(config.method, TEMethodConfig) else 1
+    te_ensemble    = jnp.zeros_like(action_chunk)
+    te_counts      = jnp.ones((te_num_queries, 1), dtype=jnp.int32)
+    te_is_init     = jnp.array(True)
     scan_length = math.ceil(env_params.max_timesteps / config.execute_horizon)
     _, (dones, env_states, infos) = jax.lax.scan(
         execute_chunk,
-        (rng, obs, env_state, action_chunk, n),
+        (rng, obs, env_state, action_chunk, n, te_ensemble, te_counts, te_is_init),
         None,
         length=scan_length,
     )
@@ -324,7 +340,7 @@ def main(
     sharding = jax.sharding.NamedSharding(mesh, pspec)
 
     @functools.partial(jax.jit, static_argnums=(0,), in_shardings=sharding, out_shardings=sharding)
-    @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec), out_specs=pspec)
+    @functools.partial(shard_map.shard_map, mesh=mesh, in_specs=(None, pspec, pspec, pspec, pspec), out_specs=pspec, check_rep=False)
     @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0))
     def _eval(config: EvalConfig, rng: jax.Array, level: kenv_state.EnvState, state_dict, weak_state_dict):
         policy = _model.FlowPolicy(

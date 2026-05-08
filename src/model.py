@@ -640,58 +640,91 @@ class FlowPolicy(nnx.Module):
         rng: jax.Array,
         obs: jax.Array,
         num_steps: int,
+        te_ensemble: jax.Array,          # [B, H, action_dim]  — from carry
+        te_counts: jax.Array,            # [num_queries, 1]    — from carry
+        te_is_init: jax.Array,           # scalar bool          — from carry
         num_queries: int,
-        ensemble_weights: jax.Array,
-        ensemble_weights_cumsum: jax.Array
-    ) -> jax.Array:
-
-        print("TE inference num_queries:", num_queries)
+        ensemble_weights: jax.Array,     # [num_queries]
+        ensemble_weights_cumsum: jax.Array,  # [num_queries]
+    ):
+        """
+        Temporal Ensembling (TE) — stateless JAX-scan-compatible version.
+ 
+        Implements the exponential weighting scheme of Zhao et al. [2023]:
+            w_i = exp(-m * i),   where i is the age of the prediction
+ 
+        State is passed through the scan carry rather than stored on self,
+        so jax.lax.cond can branch correctly at runtime.
+ 
+        Returns
+        -------
+        action_chunk   : [B, H, action_dim]  ensemble output (full chunk)
+        te_ensemble    : [B, H, action_dim]  updated ensemble for next carry
+        te_counts      : [num_queries, 1]    updated counts for next carry
+        te_is_init     : scalar bool         always False after first call
+        """
         x_1 = self.action(rng, obs, num_steps)
-
-        B, _, action_dim = x_1.shape
-
-        if self.ensembled_actions is None:
-            # Initialize ensemble
-            self.ensembled_actions = x_1
-            self.ensembled_actions_count = jnp.ones(
-                (num_queries, 1), dtype=jnp.int32
-            )
-
-        else:
-            # === online update for first (num_queries - 1) entries ===
-            counts = self.ensembled_actions_count  # (num_queries - 1, 1)
-
-            # gather weights exactly like torch
-            w_prev = ensemble_weights_cumsum[counts - 1]  # (num_queries - 1, 1)
-            w_new  = ensemble_weights[counts]              # (num_queries - 1, 1)
-            w_sum  = ensemble_weights_cumsum[counts]       # (num_queries - 1, 1)
-
-            updated = self.ensembled_actions[:, :-1, :] * w_prev
-            updated = updated + x_1[:, :-1, :] * w_new
-            updated = updated / w_sum
-
-            # update counts
-            new_counts = jnp.clip(counts + 1, a_max=num_queries)
-
-            # append last action (no averaging)
-            self.ensembled_actions = jnp.concatenate(
-                [updated, x_1[:, -1:, :]], axis=1
-            )
-
-            self.ensembled_actions_count = jnp.concatenate(
-                [
-                    new_counts,
-                    jnp.ones((1, 1), dtype=counts.dtype)
-                ],
-                axis=0
-            )
-
-        # === consume first action ===
-        x_1 = self.ensembled_actions.copy()
-        self.ensembled_actions = self.ensembled_actions[:, 1:, :]
-        self.ensembled_actions_count = self.ensembled_actions_count[1:]
-
-        return x_1
+        B = x_1.shape[0]
+ 
+        # ── INIT: first call — no prior ensemble to blend with ────────────────
+        def init_branch(_):
+            new_ensemble = x_1                                         # [B, H, D]
+            new_counts   = jnp.ones((num_queries, 1), dtype=jnp.int32)
+            return new_ensemble, new_counts
+ 
+        # ── UPDATE: blend new chunk with existing ensemble ────────────────────
+        # For positions 0..H-2: weighted average between old and new prediction
+        # For position H-1: always take the newest prediction (no prior overlap)
+        def update_branch(_):
+            counts = te_counts                                         # [num_queries, 1]
+ 
+            w_prev = ensemble_weights_cumsum[counts - 1]               # [num_queries, 1]
+            w_new  = ensemble_weights[counts]                          # [num_queries, 1]
+            w_sum  = ensemble_weights_cumsum[counts]                   # [num_queries, 1]
+ 
+            # blend overlapping positions  [B, H-1, D]
+            blended = (
+                te_ensemble[:, :-1, :] * w_prev
+                + x_1[:, :-1, :] * w_new
+            ) / w_sum
+ 
+            new_ensemble = jnp.concatenate(
+                [blended, x_1[:, -1:, :]], axis=1
+            )                                                          # [B, H, D]
+ 
+            new_counts = jnp.concatenate([
+                jnp.clip(counts + 1, a_max=num_queries),               # [num_queries, 1]
+                jnp.ones((1, 1), dtype=counts.dtype),                  # new tail slot
+            ], axis=0)                                                 # [num_queries+1, 1]
+ 
+            # drop the oldest count slot to keep shape [num_queries, 1]
+            new_counts = new_counts[:num_queries]
+ 
+            return new_ensemble, new_counts
+ 
+        # ── runtime branch via jax.lax.cond ──────────────────────────────────
+        new_ensemble, new_counts = jax.lax.cond(
+            te_is_init,
+            init_branch,
+            update_branch,
+            None,
+        )
+ 
+        # ── slide: remove first action, pad end with zeros ───────────────────
+        # eval_flow.py will further slice [inference_delay:execute_horizon]
+        # from the returned chunk; we slide the internal buffer here to align
+        # the ensemble window with the next execute_chunk call.
+        next_ensemble = jnp.concatenate([
+            new_ensemble[:, 1:, :],
+            jnp.zeros((B, 1, self.action_dim), dtype=new_ensemble.dtype),
+        ], axis=1)                                                     # [B, H, D]
+ 
+        next_counts = jnp.concatenate([
+            new_counts[1:],                                            # drop oldest
+            jnp.ones((1, 1), dtype=new_counts.dtype),                 # new slot
+        ], axis=0)                                                     # [num_queries, 1]
+ 
+        return new_ensemble, next_ensemble, next_counts, jnp.array(False)
     
     def vlash_action(
         self,
