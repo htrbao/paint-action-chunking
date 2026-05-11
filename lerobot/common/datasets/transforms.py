@@ -16,6 +16,7 @@
 import collections
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
+import random
 
 import torch
 from torchvision.transforms import v2
@@ -137,8 +138,12 @@ class SharpnessJitter(Transform):
     def make_params(self, flat_inputs: list[Any]) -> dict[str, Any]:
         sharpness_factor = torch.empty(1).uniform_(self.sharpness[0], self.sharpness[1]).item()
         return {"sharpness_factor": sharpness_factor}
+    
+    def _get_params(self, flat_inputs):
+        factor = random.uniform(self.sharpness[0], self.sharpness[1])
+        return {"sharpness_factor": factor}
 
-    def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+    def _transform(self, inpt: Any, params: dict[str, Any]) -> Any:
         sharpness_factor = params["sharpness_factor"]
         return self._call_kernel(F.adjust_sharpness, inpt, sharpness_factor=sharpness_factor)
 
