@@ -16,6 +16,37 @@ from transformers.feature_extraction_utils import BatchFeature
 import tree
 
 
+def get_prefix_weights(start: int, end: int, total: int, schedule: str) -> torch.Tensor:
+    """
+    With start=2, end=6, total=10, the output will be:
+    1  1  4/5 3/5 2/5 1/5 0  0  0  0
+           ^              ^
+         start           end
+    `start` (inclusive) is where the chunk starts being allowed to change. `end` (exclusive) is where the chunk stops
+    paying attention to the prefix. if start == 0, then the entire chunk is allowed to change. if end == total, then the
+    entire prefix is attended to.
+
+    `end` takes precedence over `start` in the sense that, if `end < start`, then `start` is pushed down to `end`. Thus,
+    if `end` is 0, then the entire prefix will always be ignored.
+    """
+    assert schedule in ["ones", "zeros", "linear", "exp"], f"Invalid schedule: {schedule}"
+    start = min(start, end)
+    idx = torch.arange(total, dtype=torch.float32)
+    if schedule == "ones":
+        w = torch.ones(total, dtype=torch.float32)
+    elif schedule == "zeros":
+        w = (idx < start).float()
+    elif schedule == "linear" or schedule == "exp":
+        w = torch.clamp((start - 1 - idx) / (end - start + 1) + 1, min=0, max=1)
+        if schedule == "exp":
+            # torch.expm1(x) = exp(x) - 1, torch.e = math.e
+            w = w * torch.expm1(w) / (torch.tensor(torch.e) - 1)
+    else:
+        raise ValueError(f"Invalid schedule: {schedule}")
+    w = torch.where(idx >= end, torch.tensor(0.0, dtype=w.dtype), w)
+    return w
+
+
 class Gr00tN1d6ActionHead(nn.Module):
     """Action head component for flow matching diffusion policy."""
 
@@ -364,6 +395,129 @@ class Gr00tN1d6ActionHead(nn.Module):
         )
 
     @torch.no_grad()
+    def get_repaint_action_with_features(
+        self,
+        backbone_features: torch.Tensor,
+        state_features: torch.Tensor,
+        embodiment_id: torch.Tensor,
+        backbone_output: BatchFeature,
+        **kwargs
+    ) -> BatchFeature:
+        """
+        Generate actions using the flow matching diffusion process.
+
+        Args:
+            backbone_features: [B, seq_len, backbone_embedding_dim]
+            state_features: [B, state_horizon, input_embedding_dim]
+            embodiment_id: [B] (embodiment IDs)
+            backbone_output: Output from the backbone model
+        """
+        assert all(key in kwargs for key in [
+            "prev_action_chunk",
+            "inference_delay",
+            "prefix_attention_horizon",
+            "actual_action_dim"
+        ])
+
+        prev_action_chunk = kwargs["prev_action_chunk"]
+        inference_delay = kwargs["inference_delay"]
+        prefix_attention_horizon = kwargs["prefix_attention_horizon"]
+        actual_action_dim = kwargs["actual_action_dim"]
+        use_prev_action = kwargs.get("use_prev_action", True)
+
+        vl_embeds = backbone_features
+
+        # Set initial actions as the sampled noise.
+        batch_size = vl_embeds.shape[0]
+        device = vl_embeds.device
+        dtype = vl_embeds.dtype
+        d = inference_delay
+        dt = 1.0 / self.num_inference_timesteps
+
+        prefix_mask = (
+            torch.arange(self.config.action_horizon, device=device)
+            .unsqueeze(0).unsqueeze(-1) < d
+        )
+
+        def model_velocity(actions: torch.Tensor, t: int) -> torch.Tensor:
+            t_cont = t / float(self.num_inference_timesteps)  # e.g. goes 0, 1/N, 2/N, ...
+            t_discretized = int(t_cont * self.num_timestep_buckets)
+
+            # Embed noised action trajectory.
+            timesteps_tensor = torch.full(
+                size=(batch_size,), fill_value=t_discretized, device=device
+            )
+            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
+            # Add position embedding.
+            if self.config.add_pos_embed:
+                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
+                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                action_features = action_features + pos_embs
+
+            # Join vision, language, state and action embedding along sequence dimension.
+            sa_embs = torch.cat((state_features, action_features), dim=1)
+
+            # Run model forward.
+            if self.config.use_alternate_vl_dit:
+                model_output = self.model(
+                    hidden_states=sa_embs,
+                    encoder_hidden_states=vl_embeds,
+                    timestep=timesteps_tensor,
+                    image_mask=backbone_output.image_mask,
+                    backbone_attention_mask=backbone_output.backbone_attention_mask,
+                )
+            else:
+                model_output = self.model(
+                    hidden_states=sa_embs,
+                    encoder_hidden_states=vl_embeds,
+                    timestep=timesteps_tensor,
+                )
+            return self.action_decoder(model_output, embodiment_id)[:, -self.action_horizon :]
+
+        # ── Step 1: naive forward pass ───────────────────────────────────────
+        x_0_free = torch.randn(
+            batch_size, self.config.action_horizon, self.config.action_dim,
+            dtype=dtype, device=device,
+        )
+        x = x_0_free.clone()
+        for t in range(self.num_inference_timesteps):
+            x = x + dt * model_velocity(x, t)
+        x_1_naive = x
+
+        # ── Step 2: construct inversion target ────────────────────────────────
+        x_1_target = torch.where(prefix_mask, prev_action_chunk, x_1_naive)
+
+        # ── Step 3: backward Euler inversion ─────────────────────────────────
+        x = x_1_target.clone().to(dtype=dtype)
+        for t in reversed(range(self.num_inference_timesteps)):
+            x = x - dt * model_velocity(x, t)
+        x_0_star = x
+
+        # ── Step 4: Mao re-painting ───────────────────────────────────────────
+        x_0_repaint = torch.where(prefix_mask, x_0_star, x_0_free)
+
+        # ── Step 5: final forward pass ────────────────────────────────────────
+        x = x_0_repaint.clone().to(dtype=dtype)
+        for t in range(self.num_inference_timesteps):
+            x = x + dt * model_velocity(x, t)
+        x_1_final = x
+        print("EACH DENOISING STEP: ", (x_1_final[:,:inference_delay,:actual_action_dim] - prev_action_chunk[:,:inference_delay,:actual_action_dim]).abs().mean())
+        if use_prev_action:
+            weights = get_prefix_weights(
+                inference_delay, prefix_attention_horizon, self.config.action_horizon, "exp"
+            ).to(device)
+            x_1_final = prev_action_chunk * weights[:, None] + x_1_final * (1 - weights[:, None])
+            print("AFTER ASSIGN: ", (x_1_final[:,:inference_delay,:] - prev_action_chunk[:,:inference_delay,:]).abs().mean())
+
+        return BatchFeature(
+            data={
+                "action_pred": x_1_final,
+                "backbone_features": vl_embeds,
+                "state_features": state_features,
+            }
+        )
+
+    @torch.no_grad()
     def get_action(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
         """
         Generate actions using the flow matching diffusion process.
@@ -386,6 +540,17 @@ class Gr00tN1d6ActionHead(nn.Module):
             state_features=features.state_features,
             embodiment_id=action_input.embodiment_id,
             backbone_output=backbone_output,
+        )
+    
+    @torch.no_grad()
+    def get_repaint_action(self, backbone_output: BatchFeature, action_input: BatchFeature, **kwargs) -> BatchFeature:
+        features = self._encode_features(backbone_output, action_input)
+        return self.get_repaint_action_with_features(
+            backbone_features=features.backbone_features,
+            state_features=features.state_features,
+            embodiment_id=action_input.embodiment_id,
+            backbone_output=backbone_output,
+            **kwargs
         )
 
     @property
@@ -522,6 +687,19 @@ class Gr00tN1d6(PreTrainedModel):
         # Forward through backbone
         backbone_outputs = self.backbone(backbone_inputs)
         action_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
+
+        return action_outputs
+    
+    def get_repaint_action(self, inputs: dict, **kwargs) -> BatchFeature:
+        """
+        Generate actions using the complete model.
+        """
+        # Prepare inputs for backbone and action head
+        backbone_inputs, action_inputs = self.prepare_input(inputs)
+
+        # Forward through backbone
+        backbone_outputs = self.backbone(backbone_inputs)
+        action_outputs = self.action_head.get_repaint_action(backbone_outputs, action_inputs, **kwargs)
 
         return action_outputs
 

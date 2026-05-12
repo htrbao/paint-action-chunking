@@ -15,8 +15,9 @@ class BasePolicy(ABC):
         - reset(): Reset policy to initial state
     """
 
-    def __init__(self, *, strict: bool = True):
+    def __init__(self, *, strict: bool = True, smooth_option: str = ""):
         self.strict = strict
+        self.smooth_option = smooth_option
 
     @abstractmethod
     def check_observation(self, observation: dict[str, Any]) -> None:
@@ -84,7 +85,12 @@ class BasePolicy(ABC):
         """
         if self.strict:
             self.check_observation(observation)
-        action, info = self._get_action(observation, options)
+        if self.smooth_option == "repaint":
+            self._get_repaint_action(observation, options)
+        elif self.smooth_option == "":
+            action, info = self._get_action(observation, options)
+        else:
+            raise NotImplementedError()
         if self.strict:
             self.check_action(action)
         return action, info

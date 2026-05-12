@@ -63,6 +63,7 @@ class Gr00tPolicy(BasePolicy):
         *,
         device: int | str,
         strict: bool = True,
+        smooth_option: str = ""
     ):
         """Initialize the Gr00t Policy.
 
@@ -75,7 +76,7 @@ class Gr00tPolicy(BasePolicy):
         # Import this to register all models.
         import gr00t.model  # noqa: F401
 
-        super().__init__(strict=strict)
+        super().__init__(strict=strict, smooth_option=smooth_option)
         model_dir = Path(model_path)
 
         # Load the pretrained model and move to target device with bfloat16 precision
@@ -100,6 +101,9 @@ class Gr00tPolicy(BasePolicy):
         assert len(language_keys) == 1, "Only one language key is supported"
         assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         self.language_key = language_keys[0]
+
+        if self.smooth_option == "repaint":
+            self.prev_action_chunk = None
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
         """Unbatch a batched observation into a list of single observations.
@@ -357,6 +361,82 @@ class Gr00tPolicy(BasePolicy):
         }
         return casted_action, {}
 
+    def _get_repaint_action(
+        self, observation: dict[str, Any], options: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Internal method to compute actions from observations.
+
+        Pipeline:
+        1. Unbatch observations into individual samples
+        2. Convert each to VLAStepData and process
+        3. Collate into model input batch
+        4. Run model inference
+        5. Decode and unnormalize actions
+
+        Args:
+            observation: Batched observation dictionary
+            options: Optional parameters (currently unused)
+
+        Returns:
+            Tuple of (actions_dict, info_dict)
+        """
+        if self.smooth_option in ["repaint"]:
+            inference_delay = observation.get("inference_delay", None)
+            prefix_attention_horizon = observation.get("prefix_attention_horizon", None)
+            execute_horizon = observation.get("execute_horizon", None)
+            actual_action_dim = observation.get("actual_action_dim", None)
+            observation = observation.get("observations", None)
+
+            saved_prev_action_chunk = self.prev_action_chunk
+            if self.prev_action_chunk is not None:
+                self.prev_action_chunk = torch.concat(
+                    (self.prev_action_chunk[:, execute_horizon:],
+                    torch.zeros(
+                        [self.prev_action_chunk.shape[0], execute_horizon, self.prev_action_chunk.shape[-1]],
+                        device=self.prev_action_chunk.device,
+                    )),
+                    dim=1,
+                )
+        # Step 1: Split batched observation into individual observations
+        unbatched_observations = self._unbatch_observation(observation)
+        processed_inputs = []
+
+        # Step 2: Process each observation through the VLA processor
+        states = []
+        for obs in unbatched_observations:
+            vla_step_data = self._to_vla_step_data(obs)
+            states.append(vla_step_data.states)  # dict[str, np.ndarray[np.float32, (T, D)]]
+            messages = [{"type": MessageType.EPISODE_STEP.value, "content": vla_step_data}]
+            processed_inputs.append(self.processor(messages))
+
+        # Step 3: Collate processed inputs into a single batch for model
+        collated_inputs = self.collate_fn(processed_inputs)
+        collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
+
+        # Step 4: Run model inference to predict actions
+        with torch.inference_mode():
+            model_pred = self.model.get_repaint_action(
+                **collated_inputs,
+                inference_delay=inference_delay,
+                prefix_attention_horizon=prefix_attention_horizon,
+                actual_action_dim=actual_action_dim,
+            )
+        normalized_action = model_pred["action_pred"].float()
+
+        # Step 5: Decode actions from normalized space back to physical units
+        batched_states = {}
+        for k in self.modality_configs["state"].modality_keys:
+            batched_states[k] = np.stack([s[k] for s in states], axis=0)  # (B, T, D)
+        unnormalized_action = self.processor.decode_action(
+            normalized_action.cpu().numpy(), self.embodiment_tag, batched_states
+        )
+
+        # Cast all actions to float32 for consistency
+        casted_action = {
+            key: value.astype(np.float32) for key, value in unnormalized_action.items()
+        }
+        return casted_action, {}
+
     def check_action(self, action: dict[str, Any]) -> None:
         """Validate that the action has the correct structure and types.
 
@@ -414,7 +494,10 @@ class Gr00tPolicy(BasePolicy):
         Returns:
             Dictionary containing the info after resetting the policy
         """
-        return {}
+        self.prev_action_chunk = None
+        return {
+            "prev_action_chunk": self.prev_action_chunk
+        }
 
 
 class Gr00tSimPolicyWrapper(PolicyWrapper):
