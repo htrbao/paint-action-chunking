@@ -350,7 +350,22 @@ class PI0Policy(PreTrainedPolicy):
     @torch.no_grad
     def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
-        raise NotImplementedError("Currently not implemented for PI0")
+        self.eval()
+
+        # Prepare inputs
+        images, img_masks = self.prepare_images(batch)
+        state = self.prepare_state(batch)
+        lang_tokens, lang_masks = self.prepare_language(batch)
+
+
+        # Sample actions using the model (pass through RTC kwargs)
+        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=None, **kwargs)
+
+        # Unpad actions to actual action dimension
+        original_action_dim = self.config.output_features[ACTION].shape[0]
+        actions = actions[:, :, :original_action_dim]
+
+        return actions
 
     @torch.no_grad
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None, **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
@@ -374,22 +389,8 @@ class PI0Policy(PreTrainedPolicy):
         # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
         # querying the policy.
         if len(self._action_queue) == 0:
-            images, img_masks = self.prepare_images(batch)
-            state = self.prepare_state(batch)
-            lang_tokens, lang_masks = self.prepare_language(batch)
-
-            actions = self.model.sample_actions(
-                images, img_masks, lang_tokens, lang_masks, state, noise=noise, **kwargs
-            )
-
-            # Unpad actions
-            original_action_dim = self.config.action_feature.shape[0]
-            actions = actions[:, :, :original_action_dim]
-
-            actions = self.unnormalize_outputs({"action": actions})["action"]
-
-            if self.config.adapt_to_pi_aloha:
-                actions = self._pi_aloha_encode_actions(actions)
+            actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
+            # Transpose to get shape (n_action_steps, batch_size, action_dim)
 
             # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
@@ -874,6 +875,7 @@ class PI0FlowMatching(nn.Module):
                 )
 
             if self._rtc_enabled():
+                print("[] RTC Sample")
                 inference_delay = kwargs.get("inference_delay")
                 prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
                 execution_horizon = kwargs.get("execution_horizon")

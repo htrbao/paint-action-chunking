@@ -54,6 +54,35 @@ class PolicyWrapper:
             "success": True
         }
 
+    def predict_action_chunk(self, observations: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert observations to tensors, call policy, and return action as dict"""
+        # Convert numpy arrays to tensors and ensure proper device placement
+        batch = {}
+        for key, value in observations.items():
+            if isinstance(value, np.ndarray):
+                batch[key] = torch.from_numpy(value).to(device=self.policy.config.device)
+            elif isinstance(value, (list, tuple)) and key == "task":
+                # Task is typically a list of strings, keep as is
+                batch[key] = value
+            else:
+                batch[key] = value
+        
+        # Call the policy's select_action method
+        action = self.policy.predict_action_chunk(batch)
+        
+        # Return as dict format expected by the service
+        if isinstance(action, torch.Tensor):
+            action = action.cpu().numpy()
+        elif isinstance(action, np.ndarray):
+            pass  # Already numpy
+        else:
+            action = np.array(action)
+            
+        return {
+            "action": action,
+            "success": True
+        }
+
     def reset(self):
         self.policy.reset()
 
@@ -67,7 +96,7 @@ class RobotInferenceServer(BaseInferenceServer):
         super().__init__(host, port, api_token)
         self.wrapped_model = PolicyWrapper(model)
         self.register_endpoint("get_action", self.wrapped_model.get_action)
-
+        self.register_endpoint("predict_action_chunk", self.wrapped_model.predict_action_chunk)
         self.register_endpoint("reset", self.wrapped_model.reset, requires_input=False)
 
     @staticmethod
@@ -86,6 +115,9 @@ class RobotInferenceClient(BaseInferenceClient):
 
     def get_action(self, observations: Dict[str, Any]) -> Dict[str, Any]:
         return self.call_endpoint("get_action", observations)
+
+    def predict_action_chunk(self, observations: Dict[str, Any]) -> Dict[str, Any]:
+        return self.call_endpoint("predict_action_chunk", observations)
 
     def reset(self):
         return self.call_endpoint("reset", requires_input=False)
