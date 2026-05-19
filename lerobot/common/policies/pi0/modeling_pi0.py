@@ -68,6 +68,8 @@ from lerobot.common.policies.pi0.paligemma_with_expert import (
 )
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 from lerobot.common.policies.rtc.modeling_rtc import RTCProcessor
+from lerobot.common.policies.repaint.modeling_repaint import RepaintProcessor
+from lerobot.configs.types import RTCAttentionSchedule
 from lerobot.common.utils.utils import get_safe_dtype
 
 from PIL import Image
@@ -340,6 +342,17 @@ class PI0Policy(PreTrainedPolicy):
             model_value = getattr(self, "model", None)
             if model_value is not None:
                 model_value.rtc_processor = self.rtc_processor
+
+    def init_rtc_processor(self):
+        """Initialize RTC processor if Repaint is enabled in config."""
+        self.repaint_processor = None
+
+        if self.config.repaint_config is not None:
+            self.repaint_processor = RepaintProcessor(self.config.repaint_config)
+
+            model_value = getattr(self, "model", None)
+            if model_value is not None:
+                model_value.repaint_processor = self.repaint_processor
 
     def _rtc_enabled(self) -> bool:
         return self.config.rtc_config is not None and self.config.rtc_config.enabled
@@ -641,10 +654,11 @@ class PI0FlowMatching(nn.Module):
     └──────────────────────────────┘
     """
 
-    def __init__(self, config, rtc_processor: RTCProcessor | None = None):
+    def __init__(self, config, rtc_processor: RTCProcessor | None = None, repaint_processor: RepaintProcessor | None = None):
         super().__init__()
         self.config = config
         self.rtc_processor = rtc_processor
+        self.repaint_processor = repaint_processor
 
         paligemma_with_export_config = PaliGemmaWithExpertConfig(
             freeze_vision_encoder=self.config.freeze_vision_encoder,
@@ -860,6 +874,24 @@ class PI0FlowMatching(nn.Module):
 
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
+
+        if self._rtc_enabled():
+            def denoise_step_partial_call(input_x_t, current_timestep=expanded_time):
+                return self.denoise_step(
+                    state=state,
+                    prefix_pad_masks=prefix_pad_masks,
+                    past_key_values=past_key_values,
+                    x_t=input_x_t,
+                    timestep=current_timestep,
+                )
+            x_t = self.repaint_processor.compute_repaint_noise(
+                x_0_free=x_t,
+                prev_chunk_left_over=kwargs.get("prev_chunk_left_over"),
+                inference_delay=kwargs.get("inference_delay"),
+                original_denoise_step_partial=denoise_step_partial_call,
+                num_steps=self.config.num_steps
+            )
+
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
 
@@ -875,7 +907,6 @@ class PI0FlowMatching(nn.Module):
                 )
 
             if self._rtc_enabled():
-                print("[] RTC Sample")
                 inference_delay = kwargs.get("inference_delay")
                 prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
                 execution_horizon = kwargs.get("execution_horizon")
@@ -899,6 +930,14 @@ class PI0FlowMatching(nn.Module):
                 self.rtc_processor.track(time=time, x_t=x_t, v_t=v_t)
 
             time += dt
+        
+        if (self._rtc_enabled() or self._repaint_enabled()) and prev_chunk_left_over is not None:
+            action_chunk_size = x_t.shape[1]
+            weight = (self.get_prefix_weights(inference_delay, execution_horizon, action_chunk_size)
+            .to(x_t.device)
+            .unsqueeze(0)
+            .unsqueeze(-1))
+            x_t = weight * prev_chunk_left_over + (1 - weight) * x_t
         return x_t
 
     def denoise_step(
@@ -940,3 +979,55 @@ class PI0FlowMatching(nn.Module):
     
     def _rtc_enabled(self):
         return self.config.rtc_config is not None and self.config.rtc_config.enabled
+    
+    def _repaint_enabled(self):
+        return self.config.repaint_config is not None and self.config.repaint_config.enabled
+
+    def get_prefix_weights(self, start, end, total, scheduler):
+        start = min(start, end)
+
+        if scheduler == RTCAttentionSchedule.ZEROS:
+            weights = torch.zeros(total)
+            weights[:start] = 1.0
+        elif scheduler == RTCAttentionSchedule.ONES:
+            weights = torch.ones(total)
+            weights[end:] = 0.0
+        elif scheduler == RTCAttentionSchedule.LINEAR:
+            lin_weights = self._linweights(start, end, total)
+            weights = self._add_trailing_zeros(lin_weights, total, end)
+            weights = self._add_leading_ones(weights, start, total)
+        elif scheduler == RTCAttentionSchedule.EXP:
+            lin_weights = self._linweights(start, end, total)
+            lin_weights = lin_weights * torch.expm1(lin_weights).div(math.e - 1)
+            weights = self._add_trailing_zeros(lin_weights, total, end)
+            weights = self._add_leading_ones(weights, start, total)
+
+        return weights
+
+    def _linweights(self, start, end, total):
+        skip_steps_at_end = max(total - end, 0)
+
+        linspace_steps = total - skip_steps_at_end - start
+
+        if end <= start or linspace_steps <= 0:
+            return torch.tensor([])
+
+        return torch.linspace(1, 0, linspace_steps + 2)[1:-1]
+
+    def _add_trailing_zeros(self, weights, total, end):
+        zeros_len = total - end
+
+        if zeros_len <= 0:
+            return weights
+
+        zeros = torch.zeros(zeros_len)
+        return torch.cat([weights, zeros])
+
+    def _add_leading_ones(self, weights, start, total):
+        ones_len = min(start, total)
+
+        if ones_len <= 0:
+            return weights
+
+        ones = torch.ones(ones_len)
+        return torch.cat([ones, weights])

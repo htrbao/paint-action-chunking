@@ -21,6 +21,7 @@ from lerobot.common.optim.schedulers import (
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
 from lerobot.common.policies.rtc.configuration_rtc import RTCConfig
+from lerobot.common.policies.repaint.configuration_repaint import RepaintConfig
 
 
 @PreTrainedConfig.register_subclass("pi0")
@@ -50,6 +51,7 @@ class PI0Config(PreTrainedConfig):
     
     # Real-Time Chunking (RTC) configuration
     rtc_config: RTCConfig | None = None
+    repaint_config: RepaintConfig | None = None
 
     # Add empty images. Used by pi0_aloha_sim which adds the empty
     # left and right wrist cameras in addition to the top camera.
