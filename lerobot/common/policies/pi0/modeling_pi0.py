@@ -463,6 +463,10 @@ class PI0Policy(PreTrainedPolicy):
     def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         self.eval()
+        batch = self.normalize_inputs(batch)
+        inference_delay = batch.get("inference_delay")
+        prev_chunk_left_over = batch.get("prev_chunk_left_over")
+        execution_horizon = batch.get("execution_horizon")
 
         # Prepare inputs
         images, img_masks = self.prepare_images(batch)
@@ -472,9 +476,9 @@ class PI0Policy(PreTrainedPolicy):
 
         # Sample actions using the model (pass through RTC kwargs)
         actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=None, 
-                                            inference_delay=batch.get("inference_delay"),
-                                            prev_chunk_left_over=batch.get("prev_chunk_left_over"),
-                                            execution_horizon=batch.get("execution_horizon"))
+                                             inference_delay=inference_delay,
+                                             prev_chunk_left_over=prev_chunk_left_over,
+                                             execution_horizon=execution_horizon)
 
         # Unpad actions to actual action dimension
         original_action_dim = self.config.output_features[ACTION].shape[0]
@@ -503,9 +507,20 @@ class PI0Policy(PreTrainedPolicy):
         batch = self.normalize_inputs(batch)
         
         if self.temporal_ensembler is not None:
-            actions = self.predict_action_chunk(batch, **kwargs)[:, : 16]
+            images, img_masks = self.prepare_images(batch)
+            state = self.prepare_state(batch)
+            lang_tokens, lang_masks = self.prepare_language(batch)
 
-            actions = self.unnormalize_outputs({"action": actions})["action"]
+
+            # Sample actions using the model (pass through RTC kwargs)
+            actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=None)
+
+            # Unpad actions to actual action dimension
+            original_action_dim = self.config.output_features[ACTION].shape[0]
+            actions = actions[:, :, :original_action_dim]
+
+            actions = self.unnormalize_outputs({"action": actions})["action"][:, : 16]
+
             action = self.temporal_ensembler.update(actions)
             return action
 
@@ -513,7 +528,6 @@ class PI0Policy(PreTrainedPolicy):
         # querying the policy.
         if len(self._action_queue) == 0:
             actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
-            actions = self.unnormalize_outputs({"action": actions})["action"]
             # Transpose to get shape (n_action_steps, batch_size, action_dim)
 
             # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
