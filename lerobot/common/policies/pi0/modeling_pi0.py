@@ -378,6 +378,7 @@ class PI0Policy(PreTrainedPolicy):
         original_action_dim = self.config.output_features[ACTION].shape[0]
         actions = actions[:, :, :original_action_dim]
 
+        actions = self.unnormalize_outputs({"action": actions})["action"]
         return actions
 
     @torch.no_grad
