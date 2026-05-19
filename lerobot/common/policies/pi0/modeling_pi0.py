@@ -466,8 +466,8 @@ class PI0Policy(PreTrainedPolicy):
         batch = self.normalize_inputs(batch)
         inference_delay = batch.get("inference_delay")
         prev_chunk_left_over = batch.get("prev_chunk_left_over")
-
-        prev_chunk_left_over = self.normalize_targets({"action": prev_chunk_left_over})["action"]
+        if prev_chunk_left_over is not None:
+            prev_chunk_left_over = self.normalize_targets({"action": prev_chunk_left_over})["action"]
 
         execution_horizon = batch.get("execution_horizon")
 
@@ -1004,7 +1004,6 @@ class PI0FlowMatching(nn.Module):
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
 
         if self._repaint_enabled():
-            print(kwargs)
             prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
             inference_delay = kwargs.get("inference_delay")
             execution_horizon = kwargs.get("execution_horizon")
