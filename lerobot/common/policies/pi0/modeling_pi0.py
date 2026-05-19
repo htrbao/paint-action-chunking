@@ -322,7 +322,8 @@ class PI0Policy(PreTrainedPolicy):
         self.language_tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224", local_files_ony=False)
         # self.language_tokenizer = AutoTokenizer.from_pretrained("/projects/extern/kisski/kisski-umg-fairpact-2/dir.project/VLA/hf_cache/hub/models--google--paligemma-3b-pt-224/snapshots/35e4f46485b4d07967e7e9935bc3786aad50687c", local_files_ony=True)
         self.init_rtc_processor()
-        self.model = PI0FlowMatching(config, rtc_processor=self.rtc_processor)
+        self.init_repaint_processor()
+        self.model = PI0FlowMatching(config, rtc_processor=self.rtc_processor, repaint_processor=self.repaint_processor)
 
         self.reset()
 
@@ -338,17 +339,19 @@ class PI0Policy(PreTrainedPolicy):
         # If RTC is not enabled - we can still track the denoising data
         if self.config.rtc_config is not None:
             self.rtc_processor = RTCProcessor(self.config.rtc_config)
+            print("[Processor] Build RTCProcessor")
 
             model_value = getattr(self, "model", None)
             if model_value is not None:
                 model_value.rtc_processor = self.rtc_processor
 
-    def init_rtc_processor(self):
+    def init_repaint_processor(self):
         """Initialize RTC processor if Repaint is enabled in config."""
         self.repaint_processor = None
 
         if self.config.repaint_config is not None:
             self.repaint_processor = RepaintProcessor(self.config.repaint_config)
+            print("[Processor] Build RepaintProcessor")
 
             model_value = getattr(self, "model", None)
             if model_value is not None:
@@ -372,7 +375,10 @@ class PI0Policy(PreTrainedPolicy):
 
 
         # Sample actions using the model (pass through RTC kwargs)
-        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=None, **kwargs)
+        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=None, 
+                                            inference_delay=batch.get("inference_delay"),
+                                            prev_chunk_left_over=batch.get("prev_chunk_left_over"),
+                                            execution_horizon=batch.get("execution_horizon"))
 
         # Unpad actions to actual action dimension
         original_action_dim = self.config.output_features[ACTION].shape[0]
@@ -876,7 +882,12 @@ class PI0FlowMatching(nn.Module):
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
 
-        if self._rtc_enabled():
+        if self._repaint_enabled():
+            print(kwargs)
+            prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
+            inference_delay = kwargs.get("inference_delay")
+            execution_horizon = kwargs.get("execution_horizon")
+            expanded_time = time.expand(bsize)
             def denoise_step_partial_call(input_x_t, current_timestep=expanded_time):
                 return self.denoise_step(
                     state=state,
@@ -887,8 +898,8 @@ class PI0FlowMatching(nn.Module):
                 )
             x_t = self.repaint_processor.compute_repaint_noise(
                 x_0_free=x_t,
-                prev_chunk_left_over=kwargs.get("prev_chunk_left_over"),
-                inference_delay=kwargs.get("inference_delay"),
+                prev_chunk_left_over=prev_chunk_left_over,
+                inference_delay=inference_delay,
                 original_denoise_step_partial=denoise_step_partial_call,
                 num_steps=self.config.num_steps
             )
@@ -932,12 +943,18 @@ class PI0FlowMatching(nn.Module):
 
             time += dt
         
+        print(f"Is enable: {self._rtc_enabled() or self._repaint_enabled()}")
         if (self._rtc_enabled() or self._repaint_enabled()) and prev_chunk_left_over is not None:
-            action_chunk_size = x_t.shape[1]
-            weight = (self.get_prefix_weights(inference_delay, execution_horizon, action_chunk_size)
+            action_chunk_size, action_dim = x_t.shape[1], x_t.shape[2]
+            weight = (self.get_prefix_weights(inference_delay, execution_horizon, action_chunk_size, RTCAttentionSchedule.EXP)
             .to(x_t.device)
             .unsqueeze(0)
             .unsqueeze(-1))
+
+            if prev_chunk_left_over.shape[1] < action_chunk_size or prev_chunk_left_over.shape[2] < action_dim:
+                padded = torch.zeros(action_chunk_size, action_dim).to(x_t.device)
+                padded[: prev_chunk_left_over.shape[1], : prev_chunk_left_over.shape[2]] = prev_chunk_left_over
+                prev_chunk_left_over = padded
             x_t = weight * prev_chunk_left_over + (1 - weight) * x_t
         return x_t
 

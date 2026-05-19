@@ -12,7 +12,7 @@ while True:
         "observation.images.color.wrist_right": np.random.rand(1, 3, 480, 640).astype(np.float32),
         "task": ["test\n"],
         "inference_delay": 2,
-        "prev_chunk_left_over": np.random.rand(50, 7).astype(np.float32),
+        "prev_chunk_left_over": np.random.rand(1, 50, 7).astype(np.float32),
         "execution_horizon": 5
     }
     

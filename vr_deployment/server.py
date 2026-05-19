@@ -22,18 +22,22 @@ def parse_args():
 
 
 def build_config(args) -> PreTrainedConfig:
+    print("[Config] Loading config from pretrained!")
     config = PreTrainedConfig.from_pretrained(args.checkpoint)
     if args.smooth_option == "rtc":
+        print("[Config] Build RTCConfig")
         config.rtc_config = RTCConfig(
             enabled=True,
             execution_horizon=args.execution_horizon,
-            max_guidance_weight=args.max_guidance_weight,
+            max_guidance_weight=10,
             prefix_attention_schedule=RTCAttentionSchedule.EXP,
             debug=False,
         )
     elif args.smooth_option == "repaint":
+        print("[Config] Build RepaintConfig")
         config.repaint_config = RepaintConfig(
             enabled=True,
+            execution_horizon=args.execution_horizon,
             prefix_attention_schedule=RTCAttentionSchedule.EXP,
             debug=False,
         )
@@ -42,7 +46,7 @@ def build_config(args) -> PreTrainedConfig:
 
 def main():
     args = parse_args()
-    print(f"Smooth (RTC): {args.smooth}")
+    print(f"Smooth: {args.smooth_option}")
 
     config = build_config(args)
     model = PI0Policy.from_pretrained(args.checkpoint, config=config)
