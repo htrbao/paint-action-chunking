@@ -466,6 +466,9 @@ class PI0Policy(PreTrainedPolicy):
         batch = self.normalize_inputs(batch)
         inference_delay = batch.get("inference_delay")
         prev_chunk_left_over = batch.get("prev_chunk_left_over")
+
+        prev_chunk_left_over = self.normalize_targets({"action": prev_chunk_left_over})["action"]
+
         execution_horizon = batch.get("execution_horizon")
 
         # Prepare inputs
