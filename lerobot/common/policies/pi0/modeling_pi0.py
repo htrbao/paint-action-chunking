@@ -1063,7 +1063,6 @@ class PI0FlowMatching(nn.Module):
 
             time += dt
         
-        print(f"Is enable: {self._rtc_enabled() or self._repaint_enabled()}")
         if (self._rtc_enabled() or self._repaint_enabled()) and prev_chunk_left_over is not None:
             action_chunk_size, action_dim = x_t.shape[1], x_t.shape[2]
             weight = (self.get_prefix_weights(inference_delay, execution_horizon, action_chunk_size, RTCAttentionSchedule.EXP)
@@ -1072,9 +1071,11 @@ class PI0FlowMatching(nn.Module):
             .unsqueeze(-1))
 
             if prev_chunk_left_over.shape[1] < action_chunk_size or prev_chunk_left_over.shape[2] < action_dim:
+                print(f"BEFORE ASSIGN: {x_t[:, :inference_delay, :prev_chunk_left_over.shape[2]]}")
                 padded = torch.zeros(action_chunk_size, action_dim).to(x_t.device)
                 padded[: prev_chunk_left_over.shape[1], : prev_chunk_left_over.shape[2]] = prev_chunk_left_over
                 prev_chunk_left_over = padded
+
             x_t = weight * prev_chunk_left_over + (1 - weight) * x_t
         return x_t
 
