@@ -333,28 +333,27 @@
     svg.appendChild(el("text", { x: bx - 6, y: pTop - 10, "text-anchor": "end", class: "dg-mini" }, document.createTextNode("executed")));
     svg.appendChild(el("text", { x: bx + 6, y: pTop - 10, "text-anchor": "start", class: "dg-mini" }, document.createTextNode("predicted chunk")));
 
-    // suffix band (last D positions of A_{t-1}) — appended first so it sits behind the line
-    const sufBx = cx[0] - (D - 0.5) * colW;
+    // overlap band (shared D time-steps where A_{t-1} suffix = A_t prefix)
+    const sufBx = bx;
     const sufBand = el("rect", {
       x: sufBx, y: pTop - 4, width: D * colW, height: (pBot - pTop) + 22,
       fill: "var(--accent-tint)", rx: 4,
     });
-    sufBand.style.opacity = "0";
+    sufBand.style.opacity = "0.45";
     svg.appendChild(sufBand);
-    // rings created now, appended after chunk/pts so they render on top
-    const sufDotY = mapY(lerp(0.32, 0.45, (cx[0] - colW - 40) / (bx - 40)));
-    const sufRings = [
-      el("circle", { cx: cx[0] - colW, cy: sufDotY, r: 6.5, fill: "none", stroke: "var(--ink-soft)", "stroke-width": 1.8 }),
-      el("circle", { cx: cx[0], cy: mapY(0.52), r: 6.5, fill: "none", stroke: "var(--ink-soft)", "stroke-width": 1.8 }),
-    ];
+    // A_{t-1} suffix values at the D overlap positions (cx[0]..cx[D-1])
+    const sufVals = [0.52, 0.585];
+    // rings created now, appended last so they render on top of chunk dots
+    const sufRings = sufVals.map((v, i) =>
+      el("circle", { cx: cx[i], cy: mapY(v), r: 6.5, fill: "none", stroke: "var(--ink-soft)", "stroke-width": 1.8 })
+    );
 
-    // executed line
+    // A_{t-1} line — extends D steps into A_t's time range to show the overlap
     svg.appendChild(el("path", {
-      d: `M 40 ${mapY(0.32)} L ${bx} ${mapY(0.45)} L ${cx[0]} ${mapY(0.52)}`,
+      d: `M 40 ${mapY(0.32)} L ${bx} ${mapY(0.45)} L ${cx[0]} ${mapY(sufVals[0])} L ${cx[1]} ${mapY(sufVals[1])}`,
       fill: "none", stroke: "var(--ink-faint)", "stroke-width": 2.6, "stroke-linecap": "round", "stroke-linejoin": "round", opacity: 0.6,
     }));
-    svg.appendChild(el("circle", { cx: cx[0] - colW, cy: sufDotY, r: 4.5, fill: "var(--ink-soft)" }));
-    svg.appendChild(el("circle", { cx: cx[0], cy: mapY(0.52), r: 4.5, fill: "var(--ink-soft)" }));
+    sufVals.forEach((v, i) => svg.appendChild(el("circle", { cx: cx[i], cy: mapY(v), r: 4.5, fill: "var(--ink-soft)" })));
 
     function pathFrom(vals) {
       let d = "";
@@ -365,10 +364,12 @@
     svg.appendChild(chunk);
     const pts = NAIVE2.map((v, i) => { const c = el("circle", { cx: cx[i], cy: mapY(v), r: 3.6, fill: "var(--warn)" }); svg.appendChild(c); return c; });
 
-    // jump marker
-    const jLine = el("line", { x1: cx[0], y1: mapY(0.52), x2: cx[0], y2: mapY(0.82), stroke: "var(--warn)", "stroke-width": 2, "stroke-dasharray": "2 3" });
-    const jTxt = el("text", { x: cx[0] + 9, y: mapY(0.67) + 4, class: "dg-jumptxt" }, document.createTextNode("jump"));
-    svg.appendChild(jLine); svg.appendChild(jTxt);
+    // jump markers at each of the D prefix positions (naive mode only)
+    const jLine = el("line", { x1: cx[0], y1: mapY(sufVals[0]), x2: cx[0], y2: mapY(NAIVE2[0]), stroke: "var(--warn)", "stroke-width": 2, "stroke-dasharray": "2 3" });
+    const jTxt = el("text", { x: cx[0] + 9, y: mapY((sufVals[0] + NAIVE2[0]) / 2) + 4, class: "dg-jumptxt" }, document.createTextNode("jump"));
+    const jLine2 = el("line", { x1: cx[1], y1: mapY(sufVals[1]), x2: cx[1], y2: mapY(NAIVE2[1]), stroke: "var(--warn)", "stroke-width": 2, "stroke-dasharray": "2 3" });
+    jLine2.style.opacity = "0";
+    svg.appendChild(jLine); svg.appendChild(jTxt); svg.appendChild(jLine2);
     sufRings.forEach((r) => svg.appendChild(r));
 
     host.appendChild(svg);
@@ -377,7 +378,7 @@
     function tween(target, color, showJump) {
       const from = displayed.slice(); const dur = prefersReduced ? 0 : 520; const t0 = performance.now();
       chunk.style.stroke = color; pts.forEach((p) => (p.style.fill = color));
-      jLine.style.opacity = showJump ? "1" : "0"; jTxt.style.opacity = showJump ? "1" : "0";
+      jLine.style.opacity = showJump ? "1" : "0"; jTxt.style.opacity = showJump ? "1" : "0"; jLine2.style.opacity = showJump ? "1" : "0";
       cancelAnimationFrame(raf);
       (function frame(now) {
         const t = dur === 0 ? 1 : Math.min(1, (now - t0) / dur); const e = easeOut(t);
@@ -395,8 +396,8 @@
       segPaint.classList.toggle("on", m === "paint");
       if (m === "naive") {
         tween(NAIVE2, "var(--warn)", true);
-        sufBand.style.opacity = "0";
-        sufRings.forEach((r) => { r.style.stroke = "var(--ink-soft)"; r.style.opacity = "0.55"; });
+        sufBand.style.opacity = "0.45";
+        sufRings.forEach((r) => { r.style.stroke = "var(--ink-soft)"; r.style.opacity = "0.7"; });
       } else {
         tween(PAINT2, "var(--accent)", false);
         sufBand.style.opacity = "1";
