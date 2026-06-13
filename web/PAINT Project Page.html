@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PAINT — Asynchronous Execution via Initial Noise Selection</title>
+<meta name="description" content="PAINT (Prefix-Anchored INiTial noise): a training-free method that reframes asynchronous robot inference as a noise-selection problem." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="paint-styles.css" />
+<script>
+  /* Activate reveal start-state before first paint (no flash); guarantee
+     content becomes visible even if the main script never loads. */
+  document.documentElement.classList.add("reveal-on");
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      document.querySelectorAll(".reveal:not(.in)").forEach(function (n) { n.classList.add("in"); });
+    }, 1800);
+  });
+</script>
+</head>
+<body>
+
+<!-- ============================ NAV ============================ -->
+<nav class="nav">
+  <div class="nav__inner">
+    <a class="brand" href="#top" aria-label="PAINT home">
+      <span class="brand__mark"><span></span></span>
+      <span class="brand__name">PAINT</span>
+    </a>
+    <div class="nav__links">
+      <a href="#tldr">Overview</a>
+      <a href="#problem">Problem</a>
+      <a href="#idea">Key idea</a>
+      <a href="#method">Method</a>
+      <a href="#results">Results</a>
+      <a href="#tasks">Tasks</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================ HERO ============================ -->
+<header class="section hero" id="top">
+  <div class="wrap">
+    <span class="hero__tag reveal">Conference on Robot Learning · <b>CoRL&nbsp;2026</b></span>
+    <h1 class="reveal">Start right,<br /><span class="accent">arrive right.</span></h1>
+    <p class="hero__sub reveal">Asynchronous execution of action-chunking robot policies via <strong>initial&nbsp;noise selection</strong> — not trajectory steering.</p>
+
+    <p class="hero__paint reveal">We introduce <b>PAINT</b> — <b>P</b>refix-<b>A</b>nchored <b>IN</b>i<b>T</b>ial noise — a training-free inference method. Instead of correcting a policy mid-generation, PAINT chooses the right starting noise so the <em>unmodified</em> flow naturally produces a chunk that continues the motion already underway.</p>
+
+    <div class="hero__authors reveal">
+      <span>Anonymous</span>
+      <!-- <span>Author Two</span>
+      <span>Author Three</span>
+      <span>Author Four</span> -->
+      <span class="aff">Anonymous &nbsp;—&nbsp; <span class="mono">.</span></span>
+    </div>
+
+    <div class="btn-row hero__btns reveal">
+      <a class="btn btn--primary" href="#" aria-label="Read the paper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
+        Paper (PDF)
+      </a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H4z"/><path d="M2 20h20"/></svg> arXiv</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-4 1.5-4-2-6-2m12 4v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.5 11.5 0 0 0-6 0C7.3 1.3 6.3 1.6 6.3 1.6a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 5 8c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V20"/></svg> Code</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9z"/></svg> Video</a>
+    </div>
+    <p class="hero__venue reveal">Training-free · no gradients · no policy modification</p>
+  </div>
+</header>
+
+<!-- ============================ TL;DR ============================ -->
+<section class="section section--alt" id="tldr">
+  <div class="wrap">
+    <p class="eyebrow reveal">The one-paragraph version</p>
+    <div class="cols">
+      <div class="reveal">
+        <h2 class="h-sec">A noise problem, <br />not a steering problem.</h2>
+      </div>
+      <div class="prose reveal">
+        <p>Robot policies predict <span class="kicker">action chunks</span> — short bursts of future moves. Generating one takes time, so the robot keeps acting while the next chunk is computed. By the time it arrives, the robot has already moved on, and the new chunk must <em>pick up exactly where the motion is</em> — or it jerks at the seam.</p>
+        <p>Prior methods fix this by steering the generation toward the executed actions. PAINT asks a different question: what if the trajectory never needed correcting? We invert the flow ODE to find an initial noise whose <em>unmodified</em> rollout already satisfies the constraint — then run the policy exactly as trained.</p>
+      </div>
+    </div>
+
+    <div class="stats reveal" style="margin-top:48px">
+      <div class="stat"><div class="n">12</div><div class="l">simulated benchmarks (Kinetix)</div></div>
+      <div class="stat"><div class="n">6</div><div class="l">real-world manipulation tasks</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">robot embodiments: single-arm, bimanual, humanoid</div></div>
+      <div class="stat"><div class="n">0<span class="unit">grad</span></div><div class="l">gradients, retraining or policy edits</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PROBLEM ============================ -->
+<section class="section" id="problem">
+  <div class="wrap">
+    <p class="eyebrow reveal">The problem</p>
+    <div class="cols">
+      <div class="reveal">
+        <h2 class="h-sec">The prefix constraint</h2>
+        <p class="lede">Under asynchronous inference the robot can’t wait. It keeps executing the current chunk while the next one is generated — and advances <span class="mono">d</span> steps in the meantime.</p>
+        <p style="margin-top:18px;color:var(--ink-soft)">So the first <span class="mono">d</span> actions of the new chunk must match the last <span class="mono">d</span> actions already executed. Violate it and the robot lurches: jerky, unsafe motion at every chunk boundary. The gap only widens as larger VLAs push inference latency past the controller’s clock.</p>
+        <p style="margin-top:14px;font-family:var(--font-mono);font-size:13.5px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;padding:12px 14px;color:var(--ink)">A&#8202;<sub>t-1</sub>[s + i] &nbsp;=&nbsp; A<sub>t</sub>[i]&nbsp;&nbsp;&nbsp;for&nbsp; i = 0 … d-1</p>
+      </div>
+      <div class="stage reveal">
+        <div id="prob-svg"></div>
+        <div class="stage__controls" style="border-top:none;padding-top:6px;margin-top:6px">
+          <div class="seg" role="group" aria-label="Toggle continuation">
+            <button id="prob-naive" class="on"><span class="d"></span>Naive async</button>
+            <button id="prob-paint"><span class="d"></span>Consistent prefix</button>
+          </div>
+        </div>
+        <p style="font-size:13px;color:var(--ink-faint);margin:14px 0 0">Toggle: a chunk sampled independently <em>jumps</em> at the boundary; a prefix-consistent chunk continues the motion.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ KEY IDEA ============================ -->
+<section class="section section--alt" id="idea">
+  <div class="wrap">
+    <p class="eyebrow reveal">The key idea</p>
+    <h2 class="h-sec reveal" style="max-width:18ch">Two ways to satisfy the constraint</h2>
+    <p class="lede reveal">Both want the same prefix. They differ in <em>where</em> they intervene — during generation, or before it.</p>
+
+    <div class="compare">
+      <div class="ccard reveal">
+        <div class="ccard__tag">Prior work — e.g. RTC</div>
+        <h3>Velocity steering</h3>
+        <svg class="ccard__svg" viewBox="0 0 320 150" role="img" aria-label="A steered trajectory bending mid-flight toward the target">
+          <line x1="20" y1="120" x2="300" y2="120" stroke="var(--border)" stroke-width="1"/>
+          <circle cx="40" cy="40" r="5" fill="var(--ink-soft)"/>
+          <text x="40" y="26" text-anchor="middle" class="dg-mini">noise</text>
+          <path d="M40 40 C 110 60, 150 95, 180 110 S 250 118, 286 112" fill="none" stroke="var(--ink-soft)" stroke-width="2.4" stroke-dasharray="4 4"/>
+          <path d="M120 71 l 14 -16 M150 92 l 16 -12 M180 110 l 17 -7" stroke="var(--warn)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="286" cy="112" r="5" fill="var(--warn)"/>
+          <text x="286" y="132" text-anchor="middle" class="dg-jumptxt">target</text>
+          <text x="150" y="48" text-anchor="middle" class="dg-mini" fill="var(--warn)">+ correction at every step</text>
+        </svg>
+        <p>Push the velocity field toward the prefix at each denoising step — using backprop, retraining, or extra compute. Effective, but the orthogonal part of the correction can drag the trajectory <em>off</em> the policy’s learned flow.</p>
+      </div>
+
+      <div class="ccard ccard--paint reveal">
+        <div class="ccard__tag">PAINT — ours</div>
+        <h3>Noise selection</h3>
+        <svg class="ccard__svg" viewBox="0 0 320 150" role="img" aria-label="A clean straight trajectory from a chosen starting noise to the target">
+          <line x1="20" y1="120" x2="300" y2="120" stroke="var(--border)" stroke-width="1"/>
+          <circle cx="40" cy="58" r="7" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+          <circle cx="40" cy="58" r="3" fill="var(--accent)"/>
+          <text x="40" y="40" text-anchor="middle" class="dg-mini" fill="var(--accent)">chosen x₀*</text>
+          <path d="M40 58 C 130 78, 210 100, 286 112" fill="none" stroke="var(--accent)" stroke-width="2.8"/>
+          <circle cx="286" cy="112" r="5" fill="var(--accent)"/>
+          <text x="286" y="132" text-anchor="middle" class="dg-mini" fill="var(--accent)">target</text>
+          <text x="165" y="76" text-anchor="middle" class="dg-mini">unmodified flow — runs straight</text>
+        </svg>
+        <p>Pick the starting noise <span class="mono">x₀*</span> so the standard ODE lands on the constraint on its own. The velocity field is never touched, so the chunk stays faithful to the policy’s own distribution.</p>
+      </div>
+    </div>
+    <p class="reveal" style="margin-top:28px;color:var(--ink-soft);max-width:70ch">This works because optimal-transport flow matching is approximately <strong>local</strong>: the noise at each position mostly governs the action at the same position. So inverting from a desired prefix recovers a noise that reproduces it — under the unmodified forward pass.</p>
+  </div>
+</section>
+
+<!-- ============================ METHOD ============================ -->
+<section class="section" id="method">
+  <div class="wrap">
+    <p class="eyebrow reveal">How PAINT works</p>
+    <h2 class="h-sec reveal" style="max-width:20ch">Six steps, all forward-only</h2>
+    <p class="lede reveal">Step through the algorithm — or press play. Watch the predicted chunk go from a jump at the boundary to a clean continuation, just by changing where generation starts.</p>
+
+    <div class="algo">
+      <div class="stage reveal">
+        <div id="algo-svg"></div>
+        <div class="stage__controls">
+          <button class="ctrl" id="algo-prev" aria-label="Previous step">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <button class="ctrl ctrl--play" id="algo-play" aria-label="Play"></button>
+          <button class="ctrl" id="algo-next" aria-label="Next step">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+          <div class="step-dots" id="algo-dots" role="tablist" aria-label="Algorithm steps"></div>
+        </div>
+      </div>
+      <div class="steptext reveal">
+        <div class="num" id="algo-num">01 / 06</div>
+        <h3 id="algo-title">Sample fresh noise</h3>
+        <p id="algo-body">…</p>
+        <div class="eq mono" id="algo-eq">…</div>
+      </div>
+    </div>
+
+    <!-- pseudocode -->
+    <div class="pseudo reveal" aria-label="Algorithm 1 pseudocode">
+      <span class="ttl">Algorithm 1 — PAINT (Prefix-Anchored INiTial noise)</span>
+<span class="ln"><span class="cmt">Require: observation oₜ, executed prefix, delay d, ODE steps N</span></span>
+<span class="ln"><span class="gut"> 1 </span> x₀ᶠʳᵉᵉ  ~  𝒩(0, I)</span>
+<span class="ln"><span class="gut"> 2 </span> x₁ⁿᵃⁱᵛᵉ  ←  πθ(x₀ᶠʳᵉᵉ, oₜ)<span class="cmt">                # naive forward pass</span></span>
+<span class="ln"><span class="gut"> 3 </span> x₁ᵗᵃʳᵍᵉᵗ ←  [ <span class="hl">executed prefix</span> | x₁ⁿᵃⁱᵛᵉ[d:] ]<span class="cmt">   # build target</span></span>
+<span class="ln"><span class="gut"> 4 </span> xτ  ←  x₁ᵗᵃʳᵍᵉᵗ</span>
+<span class="ln"><span class="gut"> 5 </span> <span class="kw">for</span> τ = 1, 1−1/N, … , 1/N:</span>
+<span class="ln"><span class="gut"> 6 </span>     xτ  ←  xτ − (1/N)·vπ(xτ, oₜ, τ)<span class="cmt">      # backward Euler</span></span>
+<span class="ln"><span class="gut"> 7 </span> x₀ⁱⁿᵛ  ←  xτ</span>
+<span class="ln"><span class="gut"> 8 </span> <span class="hl">x₀*</span>  ←  [ x₀ⁱⁿᵛ[:d] | x₀ᶠʳᵉᵉ[d:] ]<span class="cmt">         # Mao re-painting rule</span></span>
+<span class="ln"><span class="gut"> 9 </span> Aₜ  ←  πθ(<span class="hl">x₀*</span>, oₜ)<span class="cmt">                      # final forward pass</span></span>
+<span class="ln"><span class="gut">10 </span> <span class="kw">return</span> Aₜ</span>
+    </div>
+    <p class="reveal" style="margin-top:22px;color:var(--ink-faint);font-size:14px">Every line is a <em>forward</em> model call. No vector-Jacobian products at deployment — so PAINT slots cleanly into graph-compiled runtimes like TensorRT.</p>
+  </div>
+</section>
+
+<!-- ============================ RESULTS ============================ -->
+<section class="section section--alt" id="results">
+  <div class="wrap">
+    <p class="eyebrow reveal">Results</p>
+    <h2 class="h-sec reveal" style="max-width:22ch">Matches or beats gradient-based steering</h2>
+    <p class="lede reveal">Across simulation and hardware, PAINT meets or improves on Real-Time Chunking (RTC) on both task success and prefix consistency — while never touching the policy.</p>
+
+    <div class="legend reveal">
+      <span class="chip"><b>SR&nbsp;↑</b> success rate</span>
+      <span class="chip"><b>ATR&nbsp;↓</b> avg. time of successful rollouts (s)</span>
+      <span class="chip"><b>CON&nbsp;↓</b> prefix consistency error</span>
+    </div>
+
+    <!-- real-world table -->
+    <div class="tablewrap reveal">
+      <div class="tabs" role="tablist" aria-label="Architecture">
+        <button class="on" data-tab="groot" role="tab">GR00T-N1.5</button>
+        <button data-tab="pi" role="tab">π₀</button>
+      </div>
+      <div data-panel="groot" id="res-groot"></div>
+      <div data-panel="pi" id="res-pi" style="display:none"></div>
+    </div>
+    <p class="tablenote"><span class="sw"></span>PAINT (ours). Best value per task &amp; metric in <b style="color:var(--ink)">bold</b>. 20 trials per method–task pair. TE is synchronous, so it has no CON score (—).</p>
+
+    <!-- sim summary -->
+    <div class="cols reveal" style="margin-top:64px;align-items:center">
+      <div class="prose">
+        <h3 style="font-family:var(--font-head);font-size:26px;margin-bottom:14px">Simulated benchmark · Kinetix</h3>
+        <p>Across 12 force-control environments and rising inference delay, naive async degrades sharply while temporal ensembling and B-spline smoothing barely help — neither conditions on the executed prefix.</p>
+        <p><span class="kicker">PAINT-Euler</span> holds the strongest delay robustness and the lowest prefix mismatch, consistently above RTC — without any gradient computation. Each point aggregates 2,048 trials.</p>
+        <p style="font-size:14px;color:var(--ink-faint)"><span class="tinybadge">ablation</span> &nbsp; Among inversion methods, backward Euler best balances quality and cost — on par with the 2× costlier DPM-Solver.</p>
+      </div>
+      <div class="ph" style="aspect-ratio:16/11">
+        <div class="ph__label">[ Figure&nbsp;3 ]<br />success rate &amp; consistency<br />vs. inference delay<br /><span style="opacity:.7">drop in plot image</span></div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top:40px;display:flex;flex-wrap:wrap;gap:16px">
+      <div class="ccard" style="flex:1;min-width:240px">
+        <div class="ccard__tag">Latency · GR00T-N1.5</div>
+        <p style="color:var(--ink)"><span style="font-family:var(--font-head);font-size:30px">86<span style="font-size:.55em;color:var(--ink-faint)"> ±2 ms</span></span> &nbsp;<span style="color:var(--ink-faint)">PAINT</span> &nbsp;vs&nbsp; <span style="color:var(--ink-soft)">113 ±3 ms RTC</span></p>
+        <p style="margin-top:6px">Faster than gradient-based steering on smaller VLAs.</p>
+      </div>
+      <div class="ccard" style="flex:1;min-width:240px">
+        <div class="ccard__tag">Latency · π₀</div>
+        <p style="color:var(--ink)"><span style="font-family:var(--font-head);font-size:30px">311<span style="font-size:.55em;color:var(--ink-faint)"> ±7 ms</span></span> &nbsp;<span style="color:var(--ink-faint)">PAINT</span> &nbsp;vs&nbsp; <span style="color:var(--ink-soft)">213 ±4 ms RTC</span></p>
+        <p style="margin-top:6px">The trade-off: extra forward passes replace backward ones.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ TASK GALLERY ============================ -->
+<section class="section" id="tasks">
+  <div class="wrap">
+    <p class="eyebrow reveal">Real-world tasks</p>
+    <h2 class="h-sec reveal" style="max-width:20ch">Six tasks, three embodiments</h2>
+    <p class="lede reveal">Single-arm, bimanual (ALOHA) and humanoid — on two VLA architectures, under natural network inference delay.</p>
+
+    <div class="gallery" id="gallery"></div>
+    <p class="reveal" style="margin-top:24px;color:var(--ink-faint);font-size:14px">Each tile is a placeholder — drop in a rollout clip or before/after still.</p>
+  </div>
+</section>
+
+<!-- ============================ FOOTER ============================ -->
+<footer class="foot">
+  <div class="wrap foot__inner">
+    <div>
+      <strong style="font-family:var(--font-mono);color:var(--ink)">PAINT</strong> — Prefix-Anchored Initial Noise<br />
+      <span style="font-size:13px">Submitted to CoRL 2026 · placeholder page for an anonymized submission</span>
+    </div>
+    <div style="display:flex;gap:20px">
+      <a href="#">Paper</a><a href="#">arXiv</a><a href="#">Code</a><a href="#">Video</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ============================ TWEAKS ============================ -->
+<div id="tweaks-root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="paint-tweaks.jsx"></script>
+<script src="paint-diagram.js"></script>
+</body>
+</html>
