@@ -399,7 +399,16 @@ table.res tr.paint .method { color: var(--accent); font-weight: 600; }
   background: var(--surface); box-shadow: var(--shadow-sm); transition: transform 0.16s ease, box-shadow 0.2s;
 }
 .task:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
-.task .vid { aspect-ratio: 4 / 3; }
+.task .vid { aspect-ratio: 4 / 3; position: relative; overflow: hidden; }
+.task-vid { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vid-tabs { position: absolute; bottom: 8px; right: 8px; display: flex; gap: 4px; }
+.vid-tab {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+  padding: 3px 8px; border-radius: 6px; border: none; cursor: pointer;
+  background: rgba(0,0,0,0.52); color: #fff; transition: background 0.15s;
+}
+.vid-tab.on { background: var(--accent); }
+.vid-tab:hover:not(.on) { background: rgba(0,0,0,0.78); }
 .task__body { padding: 16px 18px 18px; }
 .task__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .task h4 { font-size: 19px; }

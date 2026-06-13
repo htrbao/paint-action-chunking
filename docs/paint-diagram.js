@@ -523,12 +523,12 @@
      TASK GALLERY
      ============================================================ */
   const GALLERY = [
-    { n: "Block Stacking", emb: "single-arm", d: "Precision pick-and-place — grasp and stack a block." },
-    { n: "Toy in Drawer", emb: "single-arm", d: "Multi-stage contact: open, place, close." },
-    { n: "Banana in Pot", emb: "single-arm", d: "Grasp a deformable object and drop it in a pot." },
-    { n: "Towel Flinging", emb: "bimanual · ALOHA", d: "Dynamic deformable manipulation, scored by flatness." },
-    { n: "Shorts Folding", emb: "bimanual · ALOHA", d: "Long-horizon bimanual cloth folding." },
-    { n: "Part Placing", emb: "humanoid", d: "Precision alignment with a dexterous hand." },
+    { n: "Block Stacking", emb: "single-arm",      d: "Precision pick-and-place — grasp and stack a block.", slug: "block-stacking" },
+    { n: "Toy in Drawer",  emb: "single-arm",      d: "Multi-stage contact: open, place, close.",            slug: "toy-in-drawer" },
+    { n: "Banana in Pot",  emb: "single-arm",      d: "Grasp a deformable object and drop it in a pot.",     slug: "banana-in-pot" },
+    { n: "Towel Flinging", emb: "bimanual · ALOHA", d: "Dynamic deformable manipulation, scored by flatness.", slug: "towel-fling" },
+    { n: "Shorts Folding", emb: "bimanual · ALOHA", d: "Long-horizon bimanual cloth folding.",               slug: "shorts-folding" },
+    { n: "Part Placing",   emb: "humanoid",        d: "Precision alignment with a dexterous hand.",          slug: "part-placing" },
   ];
   function buildGallery() {
     const host = document.getElementById("gallery");
@@ -536,9 +536,34 @@
     GALLERY.forEach((t) => {
       const card = document.createElement("div");
       card.className = "task reveal";
-      card.innerHTML =
-        `<div class="ph vid"><div style="display:flex;flex-direction:column;align-items:center"><div class="ph__play"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg></div><div class="ph__label">[ rollout clip ]</div></div></div>` +
-        `<div class="task__body"><div class="task__top"><h4>${t.n}</h4><span class="task__tag">${t.emb}</span></div><p>${t.d}</p></div>`;
+      if (t.slug) {
+        // shorts-folding PAINT file has a typo in the recorded filename (gr00nt vs gr00tn)
+        const model = (m) => `gr00tn1.5`;
+        const src   = (m) => `videos/${t.slug}_${model(m)}_${m.toLowerCase()}.MOV`;
+        card.innerHTML =
+          `<div class="vid">` +
+          `<video class="task-vid" src="${src("PAINT")}" autoplay muted loop playsinline></video>` +
+          `<div class="vid-tabs">` +
+          `<button class="vid-tab" data-src="${src("TE")}">TE</button>` +
+          `<button class="vid-tab" data-src="${src("RTC")}">RTC</button>` +
+          `<button class="vid-tab on" data-src="${src("PAINT")}">PAINT</button>` +
+          `</div></div>` +
+          `<div class="task__body"><div class="task__top"><h4>${t.n}</h4><span class="task__tag">${t.emb}</span></div><p>${t.d}</p></div>`;
+        const vid = card.querySelector(".task-vid");
+        card.querySelectorAll(".vid-tab").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            card.querySelectorAll(".vid-tab").forEach((b) => b.classList.remove("on"));
+            btn.classList.add("on");
+            vid.src = btn.dataset.src;
+            vid.load();
+            vid.play();
+          });
+        });
+      } else {
+        card.innerHTML =
+          `<div class="ph vid"><div style="display:flex;flex-direction:column;align-items:center"><div class="ph__play"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg></div><div class="ph__label">[ rollout clip ]</div></div></div>` +
+          `<div class="task__body"><div class="task__top"><h4>${t.n}</h4><span class="task__tag">${t.emb}</span></div><p>${t.d}</p></div>`;
+      }
       host.appendChild(card);
     });
   }
