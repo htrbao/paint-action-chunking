@@ -7,11 +7,9 @@
 <meta name="description" content="PAINT (Prefix-Anchored INiTial noise): a training-free method that reframes asynchronous robot inference as a noise-selection problem." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="paint-styles.css" />
 <script>
-  /* Activate reveal start-state before first paint (no flash); guarantee
-     content becomes visible even if the main script never loads. */
   document.documentElement.classList.add("reveal-on");
   window.addEventListener("load", function () {
     setTimeout(function () {
@@ -22,7 +20,7 @@
 </head>
 <body>
 
-<!-- ============================ NAV ============================ -->
+<!-- NAV -->
 <nav class="nav">
   <div class="nav__inner">
     <a class="brand" href="#top" aria-label="PAINT home">
@@ -40,23 +38,17 @@
   </div>
 </nav>
 
-<!-- ============================ HERO ============================ -->
+<!-- HERO -->
 <header class="section hero" id="top">
   <div class="wrap">
     <span class="hero__tag reveal">Conference on Robot Learning · <b>CoRL&nbsp;2026</b></span>
     <h1 class="reveal">Start right,<br /><span class="accent">arrive right.</span></h1>
     <p class="hero__sub reveal">Asynchronous execution of action-chunking robot policies via <strong>initial&nbsp;noise selection</strong> — not trajectory steering.</p>
-
     <p class="hero__paint reveal">We introduce <b>PAINT</b> — <b>P</b>refix-<b>A</b>nchored <b>IN</b>i<b>T</b>ial noise — a training-free inference method. Instead of correcting a policy mid-generation, PAINT chooses the right starting noise so the <em>unmodified</em> flow naturally produces a chunk that continues the motion already underway.</p>
-
     <div class="hero__authors reveal">
       <span>Anonymous</span>
-      <!-- <span>Author Two</span>
-      <span>Author Three</span>
-      <span>Author Four</span> -->
       <span class="aff">Anonymous &nbsp;—&nbsp; <span class="mono">.</span></span>
     </div>
-
     <div class="btn-row hero__btns reveal">
       <a class="btn btn--primary" href="#" aria-label="Read the paper">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
@@ -70,7 +62,7 @@
   </div>
 </header>
 
-<!-- ============================ TL;DR ============================ -->
+<!-- TL;DR -->
 <section class="section section--alt" id="tldr">
   <div class="wrap">
     <p class="eyebrow reveal">The one-paragraph version</p>
@@ -83,7 +75,6 @@
         <p>Prior methods fix this by steering the generation toward the executed actions. PAINT asks a different question: what if the trajectory never needed correcting? We invert the flow ODE to find an initial noise whose <em>unmodified</em> rollout already satisfies the constraint — then run the policy exactly as trained.</p>
       </div>
     </div>
-
     <div class="stats reveal" style="margin-top:48px">
       <div class="stat"><div class="n">12</div><div class="l">simulated benchmarks (Kinetix)</div></div>
       <div class="stat"><div class="n">6</div><div class="l">real-world manipulation tasks</div></div>
@@ -93,15 +84,15 @@
   </div>
 </section>
 
-<!-- ============================ PROBLEM ============================ -->
+<!-- PROBLEM -->
 <section class="section" id="problem">
   <div class="wrap">
     <p class="eyebrow reveal">The problem</p>
     <div class="cols">
       <div class="reveal">
         <h2 class="h-sec">The prefix constraint</h2>
-        <p class="lede">Under asynchronous inference the robot can’t wait. It keeps executing the current chunk while the next one is generated — and advances <span class="mono">d</span> steps in the meantime.</p>
-        <p style="margin-top:18px;color:var(--ink-soft)">So the first <span class="mono">d</span> actions of the new chunk must match the last <span class="mono">d</span> actions already executed. Violate it and the robot lurches: jerky, unsafe motion at every chunk boundary. The gap only widens as larger VLAs push inference latency past the controller’s clock.</p>
+        <p class="lede">Under asynchronous inference the robot can't wait. It keeps executing the current chunk while the next one is generated — and advances <span class="mono">d</span> steps in the meantime.</p>
+        <p style="margin-top:18px;color:var(--ink-soft)">So the first <span class="mono">d</span> actions of the new chunk must match the last <span class="mono">d</span> actions already executed. Violate it and the robot lurches: jerky, unsafe motion at every chunk boundary. The gap only widens as larger VLAs push inference latency past the controller's clock.</p>
         <p style="margin-top:14px;font-family:var(--font-mono);font-size:13.5px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;padding:12px 14px;color:var(--ink)">A&#8202;<sub>t-1</sub>[s + i] &nbsp;=&nbsp; A<sub>t</sub>[i]&nbsp;&nbsp;&nbsp;for&nbsp; i = 0 … d-1</p>
       </div>
       <div class="stage reveal">
@@ -118,13 +109,12 @@
   </div>
 </section>
 
-<!-- ============================ KEY IDEA ============================ -->
+<!-- KEY IDEA -->
 <section class="section section--alt" id="idea">
   <div class="wrap">
     <p class="eyebrow reveal">The key idea</p>
     <h2 class="h-sec reveal" style="max-width:18ch">Two ways to satisfy the constraint</h2>
     <p class="lede reveal">Both want the same prefix. They differ in <em>where</em> they intervene — during generation, or before it.</p>
-
     <div class="compare">
       <div class="ccard reveal">
         <div class="ccard__tag">Prior work — e.g. RTC</div>
@@ -139,9 +129,8 @@
           <text x="286" y="132" text-anchor="middle" class="dg-jumptxt">target</text>
           <text x="150" y="48" text-anchor="middle" class="dg-mini" fill="var(--warn)">+ correction at every step</text>
         </svg>
-        <p>Push the velocity field toward the prefix at each denoising step — using backprop, retraining, or extra compute. Effective, but the orthogonal part of the correction can drag the trajectory <em>off</em> the policy’s learned flow.</p>
+        <p>Push the velocity field toward the prefix at each denoising step — using backprop, retraining, or extra compute. Effective, but the orthogonal part of the correction can drag the trajectory <em>off</em> the policy's learned flow.</p>
       </div>
-
       <div class="ccard ccard--paint reveal">
         <div class="ccard__tag">PAINT — ours</div>
         <h3>Noise selection</h3>
@@ -155,20 +144,19 @@
           <text x="286" y="132" text-anchor="middle" class="dg-mini" fill="var(--accent)">target</text>
           <text x="165" y="76" text-anchor="middle" class="dg-mini">unmodified flow — runs straight</text>
         </svg>
-        <p>Pick the starting noise <span class="mono">x₀*</span> so the standard ODE lands on the constraint on its own. The velocity field is never touched, so the chunk stays faithful to the policy’s own distribution.</p>
+        <p>Pick the starting noise <span class="mono">x₀*</span> so the standard ODE lands on the constraint on its own. The velocity field is never touched, so the chunk stays faithful to the policy's own distribution.</p>
       </div>
     </div>
     <p class="reveal" style="margin-top:28px;color:var(--ink-soft);max-width:70ch">This works because optimal-transport flow matching is approximately <strong>local</strong>: the noise at each position mostly governs the action at the same position. So inverting from a desired prefix recovers a noise that reproduces it — under the unmodified forward pass.</p>
   </div>
 </section>
 
-<!-- ============================ METHOD ============================ -->
+<!-- METHOD -->
 <section class="section" id="method">
   <div class="wrap">
     <p class="eyebrow reveal">How PAINT works</p>
     <h2 class="h-sec reveal" style="max-width:20ch">Six steps, all forward-only</h2>
     <p class="lede reveal">Step through the algorithm — or press play. Watch the predicted chunk go from a jump at the boundary to a clean continuation, just by changing where generation starts.</p>
-
     <div class="algo">
       <div class="stage reveal">
         <div id="algo-svg"></div>
@@ -190,8 +178,6 @@
         <div class="eq mono" id="algo-eq">…</div>
       </div>
     </div>
-
-    <!-- pseudocode -->
     <div class="pseudo reveal" aria-label="Algorithm 1 pseudocode">
       <span class="ttl">Algorithm 1 — PAINT (Prefix-Anchored INiTial noise)</span>
 <span class="ln"><span class="cmt">Require: observation oₜ, executed prefix, delay d, ODE steps N</span></span>
@@ -210,7 +196,7 @@
   </div>
 </section>
 
-<!-- ============================ RESULTS ============================ -->
+<!-- RESULTS -->
 <section class="section section--alt" id="results">
   <div class="wrap">
     <p class="eyebrow reveal">Results</p>
@@ -223,14 +209,85 @@
       <span class="chip"><b>CON&nbsp;↓</b> prefix consistency error</span>
     </div>
 
-    <!-- real-world table -->
     <div class="tablewrap reveal">
       <div class="tabs" role="tablist" aria-label="Architecture">
         <button class="on" data-tab="groot" role="tab">GR00T-N1.5</button>
         <button data-tab="pi" role="tab">π₀</button>
       </div>
-      <div data-panel="groot" id="res-groot"></div>
-      <div data-panel="pi" id="res-pi" style="display:none"></div>
+
+      <!-- GR00T table -->
+      <div data-panel="groot" id="res-groot">
+        <table class="res">
+          <thead><tr><th>Method</th><th>SR ↑</th><th>ATR ↓</th><th>CON ↓</th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="4">Block Stacking &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.55</td><td class="tnum">28.27</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.75</td><td class="tnum">16.04</td><td class="tnum">0.030</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.75</td><td class="tnum best">15.32</td><td class="tnum best">0.023</td></tr>
+
+            <tr class="grp"><td colspan="4">Toy in Drawer &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.60</td><td class="tnum">23.19</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum">0.75</td><td class="tnum">17.85</td><td class="tnum">0.025</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.85</td><td class="tnum best">17.08</td><td class="tnum best">0.023</td></tr>
+
+            <tr class="grp"><td colspan="4">Banana in Pot &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.60</td><td class="tnum">29.57</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.70</td><td class="tnum">30.15</td><td class="tnum">0.031</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.70</td><td class="tnum best">29.79</td><td class="tnum best">0.026</td></tr>
+
+            <tr class="grp"><td colspan="4">Towel Flinging &nbsp;·&nbsp; <span style="color:var(--ink-faint)">bimanual</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.51</td><td class="tnum">17.13</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum">0.76</td><td class="tnum best">6.98</td><td class="tnum">0.028</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.79</td><td class="tnum">7.44</td><td class="tnum best">0.023</td></tr>
+
+            <tr class="grp"><td colspan="4">Shorts Folding &nbsp;·&nbsp; <span style="color:var(--ink-faint)">bimanual</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.90</td><td class="tnum">33.82</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum">0.90</td><td class="tnum best">18.79</td><td class="tnum">0.027</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.95</td><td class="tnum">19.77</td><td class="tnum best">0.025</td></tr>
+
+            <tr class="grp"><td colspan="4">Part Placing &nbsp;·&nbsp; <span style="color:var(--ink-faint)">humanoid</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.50</td><td class="tnum">68.51</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.70</td><td class="tnum">18.28</td><td class="tnum">0.030</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.70</td><td class="tnum best">17.32</td><td class="tnum best">0.021</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- π₀ table -->
+      <div data-panel="pi" id="res-pi" style="display:none">
+        <table class="res">
+          <thead><tr><th>Method</th><th>SR ↑</th><th>ATR ↓</th><th>CON ↓</th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="4">Block Stacking &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.20</td><td class="tnum">58.35</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.50</td><td class="tnum">15.30</td><td class="tnum">0.036</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.50</td><td class="tnum best">14.90</td><td class="tnum best">0.034</td></tr>
+
+            <tr class="grp"><td colspan="4">Toy in Drawer &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.15</td><td class="tnum">53.27</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.65</td><td class="tnum">36.35</td><td class="tnum">0.032</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.65</td><td class="tnum best">30.39</td><td class="tnum best">0.028</td></tr>
+
+            <tr class="grp"><td colspan="4">Banana in Pot &nbsp;·&nbsp; <span style="color:var(--ink-faint)">single-arm</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.10</td><td class="tnum">63.20</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum best">0.55</td><td class="tnum best">37.41</td><td class="tnum">0.028</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.55</td><td class="tnum">39.64</td><td class="tnum best">0.026</td></tr>
+
+            <tr class="grp"><td colspan="4">Towel Flinging &nbsp;·&nbsp; <span style="color:var(--ink-faint)">bimanual</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.30</td><td class="tnum">25.07</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum">0.54</td><td class="tnum">17.04</td><td class="tnum">0.039</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.80</td><td class="tnum best">15.16</td><td class="tnum best">0.027</td></tr>
+
+            <tr class="grp"><td colspan="4">Shorts Folding &nbsp;·&nbsp; <span style="color:var(--ink-faint)">bimanual</span></td></tr>
+            <tr><td class="method">TE</td><td class="tnum">0.40</td><td class="tnum">52.32</td><td class="tnum" style="color:var(--ink-faint)">–</td></tr>
+            <tr><td class="method">RTC</td><td class="tnum">0.65</td><td class="tnum best">29.64</td><td class="tnum">0.028</td></tr>
+            <tr class="paint"><td class="method">PAINT</td><td class="tnum best">0.70</td><td class="tnum">30.54</td><td class="tnum best">0.027</td></tr>
+
+            <tr class="grp"><td colspan="4">Part Placing &nbsp;·&nbsp; <span style="color:var(--ink-faint)">humanoid</span></td></tr>
+            <tr><td class="method" style="color:var(--ink-faint)">N/A</td><td colspan="3" style="color:var(--ink-faint);text-align:left">checkpoint targets manipulators, not the humanoid platform</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <p class="tablenote"><span class="sw"></span>PAINT (ours). Best value per task &amp; metric in <b style="color:var(--ink)">bold</b>. 20 trials per method–task pair. TE is synchronous, so it has no CON score (—).</p>
 
@@ -262,19 +319,94 @@
   </div>
 </section>
 
-<!-- ============================ TASK GALLERY ============================ -->
+<!-- TASK GALLERY -->
 <section class="section" id="tasks">
   <div class="wrap">
     <p class="eyebrow reveal">Real-world tasks</p>
     <h2 class="h-sec reveal" style="max-width:20ch">Six tasks, three embodiments</h2>
     <p class="lede reveal">Single-arm, bimanual (ALOHA) and humanoid — on two VLA architectures, under natural network inference delay.</p>
 
-    <div class="gallery" id="gallery"></div>
-    <p class="reveal" style="margin-top:24px;color:var(--ink-faint);font-size:14px">Each tile is a placeholder — drop in a rollout clip or before/after still.</p>
+    <div class="gallery">
+      <!-- Block Stacking — PAINT only -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/block-stacking_gr00tn1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab on" data-src="videos/block-stacking_gr00tn1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Block Stacking</h4><span class="task__tag">single-arm</span></div><p>Precision pick-and-place — grasp and stack a block.</p></div>
+      </div>
+
+      <!-- Toy in Drawer -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/toy-in-drawer_gr00tn1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab" data-src="videos/toy-in-drawer_gr00tn1.5_te.MOV">TE</button>
+            <button class="vid-tab" data-src="videos/toy-in-drawer_gr00tn1.5_rtc.MOV">RTC</button>
+            <button class="vid-tab on" data-src="videos/toy-in-drawer_gr00tn1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Toy in Drawer</h4><span class="task__tag">single-arm</span></div><p>Multi-stage contact: open, place, close.</p></div>
+      </div>
+
+      <!-- Banana in Pot -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/banana-in-pot_gr00tn1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab" data-src="videos/banana-in-pot_gr00tn1.5_te.MOV">TE</button>
+            <button class="vid-tab" data-src="videos/banana-in-pot_gr00tn1.5_rtc.MOV">RTC</button>
+            <button class="vid-tab on" data-src="videos/banana-in-pot_gr00tn1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Banana in Pot</h4><span class="task__tag">single-arm</span></div><p>Grasp a deformable object and drop it in a pot.</p></div>
+      </div>
+
+      <!-- Towel Flinging -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/towel-fling_gr00tn1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab" data-src="videos/towel-fling_gr00tn1.5_te.MOV">TE</button>
+            <button class="vid-tab" data-src="videos/towel-fling_gr00tn1.5_rtc.MOV">RTC</button>
+            <button class="vid-tab on" data-src="videos/towel-fling_gr00tn1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Towel Flinging</h4><span class="task__tag">bimanual · ALOHA</span></div><p>Dynamic deformable manipulation, scored by flatness.</p></div>
+      </div>
+
+      <!-- Shorts Folding -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/shorts-folding_gr00nt1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab" data-src="videos/shorts-folding_gr00tn1.5_te.MOV">TE</button>
+            <button class="vid-tab" data-src="videos/shorts-folding_gr00tn1.5_rtc.MOV">RTC</button>
+            <button class="vid-tab on" data-src="videos/shorts-folding_gr00nt1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Shorts Folding</h4><span class="task__tag">bimanual · ALOHA</span></div><p>Long-horizon bimanual cloth folding.</p></div>
+      </div>
+
+      <!-- Part Placing -->
+      <div class="task reveal">
+        <div class="vid">
+          <video class="task-vid" src="videos/part-placing_gr00tn1.5_paint.MOV" autoplay muted loop playsinline></video>
+          <div class="vid-tabs">
+            <button class="vid-tab" data-src="videos/part-placing_gr00tn1.5_te.MOV">TE</button>
+            <button class="vid-tab" data-src="videos/part-placing_gr00tn1.5_rtc.MOV">RTC</button>
+            <button class="vid-tab on" data-src="videos/part-placing_gr00tn1.5_paint.MOV">PAINT</button>
+          </div>
+        </div>
+        <div class="task__body"><div class="task__top"><h4>Part Placing</h4><span class="task__tag">humanoid</span></div><p>Precision alignment with a dexterous hand.</p></div>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ============================ FOOTER ============================ -->
+<!-- FOOTER -->
 <footer class="foot">
   <div class="wrap foot__inner">
     <div>
@@ -287,14 +419,34 @@
   </div>
 </footer>
 
-<!-- ============================ TWEAKS ============================ -->
-<div id="tweaks-root"></div>
-
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-<script type="text/babel" src="tweaks-panel.jsx"></script>
-<script type="text/babel" src="paint-tweaks.jsx"></script>
 <script src="paint-diagram.js"></script>
+<script>
+  // Video tab switching
+  document.querySelectorAll(".task").forEach(function (card) {
+    var vid = card.querySelector(".task-vid");
+    if (!vid) return;
+    card.querySelectorAll(".vid-tab").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        card.querySelectorAll(".vid-tab").forEach(function (b) { b.classList.remove("on"); });
+        btn.classList.add("on");
+        vid.src = btn.dataset.src;
+        vid.load();
+        vid.play();
+      });
+    });
+  });
+
+  // Results table tab switching
+  document.querySelectorAll(".tabs button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var wrap = btn.closest(".tablewrap");
+      wrap.querySelectorAll(".tabs button").forEach(function (b) { b.classList.remove("on"); });
+      btn.classList.add("on");
+      wrap.querySelectorAll("[data-panel]").forEach(function (p) {
+        p.style.display = p.dataset.panel === btn.dataset.tab ? "" : "none";
+      });
+    });
+  });
+</script>
 </body>
 </html>
