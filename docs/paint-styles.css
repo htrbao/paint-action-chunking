@@ -305,6 +305,7 @@ em { font-style: italic; }
   display: flex; flex-direction: column; justify-content: center;
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-2); padding: clamp(22px, 3vw, 34px);
+  min-width: 0;
 }
 .steptext .num {
   font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.12em;
