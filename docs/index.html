@@ -3,13 +3,15 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>PAINT — Asynchronous Execution via Initial Noise Selection</title>
+<title>Start Right, Arrive Right: Asynchronous Execution via Initial Noise Selection</title>
 <meta name="description" content="PAINT (Prefix-Anchored INiTial noise): a training-free method that reframes asynchronous robot inference as a noise-selection problem." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="paint-styles.css" />
 <script>
+  /* Activate reveal start-state before first paint (no flash); guarantee
+     content becomes visible even if the main script never loads. */
   document.documentElement.classList.add("reveal-on");
   window.addEventListener("load", function () {
     setTimeout(function () {
@@ -20,7 +22,7 @@
 </head>
 <body>
 
-<!-- NAV -->
+<!-- ============================ NAV ============================ -->
 <nav class="nav">
   <div class="nav__inner">
     <a class="brand" href="#top" aria-label="PAINT home">
@@ -38,31 +40,37 @@
   </div>
 </nav>
 
-<!-- HERO -->
+<!-- ============================ HERO ============================ -->
 <header class="section hero" id="top">
   <div class="wrap">
-    <span class="hero__tag reveal">Conference on Robot Learning · <b>CoRL&nbsp;2026</b></span>
+    <span class="hero__tag reveal"><b>Under&nbsp;Review</b></span>
     <h1 class="reveal">Start right,<br /><span class="accent">arrive right.</span></h1>
     <p class="hero__sub reveal">Asynchronous execution of action-chunking robot policies via <strong>initial&nbsp;noise selection</strong> — not trajectory steering.</p>
+
     <p class="hero__paint reveal">We introduce <b>PAINT</b> — <b>P</b>refix-<b>A</b>nchored <b>IN</b>i<b>T</b>ial noise — a training-free inference method. Instead of correcting a policy mid-generation, PAINT chooses the right starting noise so the <em>unmodified</em> flow naturally produces a chunk that continues the motion already underway.</p>
+
     <div class="hero__authors reveal">
       <span>Anonymous</span>
-      <span class="aff">Anonymous &nbsp;—&nbsp; <span class="mono">.</span></span>
+      <!-- <span>Author Two</span>
+      <span>Author Three</span>
+      <span>Author Four</span> -->
+      <span class="aff">Under Review&nbsp;</span>
     </div>
+
     <div class="btn-row hero__btns reveal">
-      <a class="btn btn--primary" href="#" aria-label="Read the paper">
+      <a class="btn btn--primary" href="paper/PAINT.pdf" target="_blank" rel="noopener" aria-label="Read the paper">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
         Paper (PDF)
       </a>
       <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H4z"/><path d="M2 20h20"/></svg> arXiv</a>
-      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-4 1.5-4-2-6-2m12 4v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.5 11.5 0 0 0-6 0C7.3 1.3 6.3 1.6 6.3 1.6a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 5 8c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V20"/></svg> Code</a>
-      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9z"/></svg> Video</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-4 1.5-4-2-6-2m12 4v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.5 11.5 0 0 0-6 0C7.3 1.3 6.3 1.6 6.3 1.6a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 5 8c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V20"/></svg> Code (Soon)</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9z"/></svg> Video (Soon)</a>
     </div>
     <p class="hero__venue reveal">Training-free · no gradients · no policy modification</p>
   </div>
 </header>
 
-<!-- TL;DR -->
+<!-- ============================ TL;DR ============================ -->
 <section class="section section--alt" id="tldr">
   <div class="wrap">
     <p class="eyebrow reveal">The one-paragraph version</p>
@@ -75,6 +83,7 @@
         <p>Prior methods fix this by steering the generation toward the executed actions. PAINT asks a different question: what if the trajectory never needed correcting? We invert the flow ODE to find an initial noise whose <em>unmodified</em> rollout already satisfies the constraint — then run the policy exactly as trained.</p>
       </div>
     </div>
+
     <div class="stats reveal" style="margin-top:48px">
       <div class="stat"><div class="n">12</div><div class="l">simulated benchmarks (Kinetix)</div></div>
       <div class="stat"><div class="n">6</div><div class="l">real-world manipulation tasks</div></div>
@@ -84,15 +93,15 @@
   </div>
 </section>
 
-<!-- PROBLEM -->
+<!-- ============================ PROBLEM ============================ -->
 <section class="section" id="problem">
   <div class="wrap">
     <p class="eyebrow reveal">The problem</p>
     <div class="cols">
       <div class="reveal">
         <h2 class="h-sec">The prefix constraint</h2>
-        <p class="lede">Under asynchronous inference the robot can't wait. It keeps executing the current chunk while the next one is generated — and advances <span class="mono">d</span> steps in the meantime.</p>
-        <p style="margin-top:18px;color:var(--ink-soft)">So the first <span class="mono">d</span> actions of the new chunk must match the last <span class="mono">d</span> actions already executed. Violate it and the robot lurches: jerky, unsafe motion at every chunk boundary. The gap only widens as larger VLAs push inference latency past the controller's clock.</p>
+        <p class="lede">Under asynchronous inference the robot can’t wait. It keeps executing the current chunk while the next one is generated — and advances <span class="mono">d</span> steps in the meantime.</p>
+        <p style="margin-top:18px;color:var(--ink-soft)">So the first <span class="mono">d</span> actions of the new chunk must match the last <span class="mono">d</span> actions already executed. Violate it and the robot lurches: jerky, unsafe motion at every chunk boundary. The gap only widens as larger VLAs push inference latency past the controller’s clock.</p>
         <p style="margin-top:14px;font-family:var(--font-mono);font-size:13.5px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;padding:12px 14px;color:var(--ink)">A&#8202;<sub>t-1</sub>[s + i] &nbsp;=&nbsp; A<sub>t</sub>[i]&nbsp;&nbsp;&nbsp;for&nbsp; i = 0 … d-1</p>
       </div>
       <div class="stage reveal">
@@ -109,12 +118,13 @@
   </div>
 </section>
 
-<!-- KEY IDEA -->
+<!-- ============================ KEY IDEA ============================ -->
 <section class="section section--alt" id="idea">
   <div class="wrap">
     <p class="eyebrow reveal">The key idea</p>
     <h2 class="h-sec reveal" style="max-width:18ch">Two ways to satisfy the constraint</h2>
     <p class="lede reveal">Both want the same prefix. They differ in <em>where</em> they intervene — during generation, or before it.</p>
+
     <div class="compare">
       <div class="ccard reveal">
         <div class="ccard__tag">Prior work — e.g. RTC</div>
@@ -129,8 +139,9 @@
           <text x="286" y="132" text-anchor="middle" class="dg-jumptxt">target</text>
           <text x="150" y="48" text-anchor="middle" class="dg-mini" fill="var(--warn)">+ correction at every step</text>
         </svg>
-        <p>Push the velocity field toward the prefix at each denoising step — using backprop, retraining, or extra compute. Effective, but the orthogonal part of the correction can drag the trajectory <em>off</em> the policy's learned flow.</p>
+        <p>Push the velocity field toward the prefix at each denoising step — using backprop, retraining, or extra compute. Effective, but the orthogonal part of the correction can drag the trajectory <em>off</em> the policy’s learned flow.</p>
       </div>
+
       <div class="ccard ccard--paint reveal">
         <div class="ccard__tag">PAINT — ours</div>
         <h3>Noise selection</h3>
@@ -144,19 +155,20 @@
           <text x="286" y="132" text-anchor="middle" class="dg-mini" fill="var(--accent)">target</text>
           <text x="165" y="76" text-anchor="middle" class="dg-mini">unmodified flow — runs straight</text>
         </svg>
-        <p>Pick the starting noise <span class="mono">x₀*</span> so the standard ODE lands on the constraint on its own. The velocity field is never touched, so the chunk stays faithful to the policy's own distribution.</p>
+        <p>Pick the starting noise <span class="mono">x₀*</span> so the standard ODE lands on the constraint on its own. The velocity field is never touched, so the chunk stays faithful to the policy’s own distribution.</p>
       </div>
     </div>
     <p class="reveal" style="margin-top:28px;color:var(--ink-soft);max-width:70ch">This works because optimal-transport flow matching is approximately <strong>local</strong>: the noise at each position mostly governs the action at the same position. So inverting from a desired prefix recovers a noise that reproduces it — under the unmodified forward pass.</p>
   </div>
 </section>
 
-<!-- METHOD -->
+<!-- ============================ METHOD ============================ -->
 <section class="section" id="method">
   <div class="wrap">
     <p class="eyebrow reveal">How PAINT works</p>
     <h2 class="h-sec reveal" style="max-width:20ch">Six steps, all forward-only</h2>
     <p class="lede reveal">Step through the algorithm — or press play. Watch the predicted chunk go from a jump at the boundary to a clean continuation, just by changing where generation starts.</p>
+
     <div class="algo">
       <div class="stage reveal">
         <div id="algo-svg"></div>
@@ -178,6 +190,8 @@
         <div class="eq mono" id="algo-eq">…</div>
       </div>
     </div>
+
+    <!-- pseudocode -->
     <div class="pseudo reveal" aria-label="Algorithm 1 pseudocode">
       <span class="ttl">Algorithm 1 — PAINT (Prefix-Anchored INiTial noise)</span>
 <span class="ln"><span class="cmt">Require: observation oₜ, executed prefix, delay d, ODE steps N</span></span>
@@ -196,7 +210,7 @@
   </div>
 </section>
 
-<!-- RESULTS -->
+<!-- ============================ RESULTS ============================ -->
 <section class="section section--alt" id="results">
   <div class="wrap">
     <p class="eyebrow reveal">Results</p>
@@ -209,12 +223,12 @@
       <span class="chip"><b>CON&nbsp;↓</b> prefix consistency error</span>
     </div>
 
+    <!-- real-world table -->
     <div class="tablewrap reveal">
       <div class="tabs" role="tablist" aria-label="Architecture">
         <button class="on" data-tab="groot" role="tab">GR00T-N1.5</button>
         <button data-tab="pi" role="tab">π₀</button>
       </div>
-
       <!-- GR00T table -->
       <div data-panel="groot" id="res-groot">
         <table class="res">
@@ -319,7 +333,7 @@
   </div>
 </section>
 
-<!-- TASK GALLERY -->
+<!-- ============================ TASK GALLERY ============================ -->
 <section class="section" id="tasks">
   <div class="wrap">
     <p class="eyebrow reveal">Real-world tasks</p>
@@ -330,44 +344,44 @@
       <!-- Block Stacking — PAINT only -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/block-stacking_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/block-stacking_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab on" data-src="videos/block-stacking_gr00tn1.5_paint.mp4">PAINT</button>
           </div>
         </div>
-        <div class="task__body"><div class="task__top"><h4>Block Stacking</h4><span class="task__tag">single-arm</span></div><p>Precision pick-and-place — grasp and stack a block.</p></div>
+        <div class="task__body"><div class="task__top"><h4>Block Stacking</h4><span class="task__tag">single-arm · ALOHA</span></div><p>Precision pick-and-place — grasp and stack a block.</p></div>
       </div>
 
       <!-- Toy in Drawer -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/toy-in-drawer_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/toy-in-drawer_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab" data-src="videos/toy-in-drawer_gr00tn1.5_te.mp4">TE</button>
             <button class="vid-tab" data-src="videos/toy-in-drawer_gr00tn1.5_rtc.mp4">RTC</button>
             <button class="vid-tab on" data-src="videos/toy-in-drawer_gr00tn1.5_paint.mp4">PAINT</button>
           </div>
         </div>
-        <div class="task__body"><div class="task__top"><h4>Toy in Drawer</h4><span class="task__tag">single-arm</span></div><p>Multi-stage contact: open, place, close.</p></div>
+        <div class="task__body"><div class="task__top"><h4>Toy in Drawer</h4><span class="task__tag">single-arm · ALOHA</span></div><p>Multi-stage contact: open, place, close.</p></div>
       </div>
 
       <!-- Banana in Pot -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/banana-in-pot_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/banana-in-pot_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab" data-src="videos/banana-in-pot_gr00tn1.5_te.mp4">TE</button>
             <button class="vid-tab" data-src="videos/banana-in-pot_gr00tn1.5_rtc.mp4">RTC</button>
             <button class="vid-tab on" data-src="videos/banana-in-pot_gr00tn1.5_paint.mp4">PAINT</button>
           </div>
         </div>
-        <div class="task__body"><div class="task__top"><h4>Banana in Pot</h4><span class="task__tag">single-arm</span></div><p>Grasp a deformable object and drop it in a pot.</p></div>
+        <div class="task__body"><div class="task__top"><h4>Banana in Pot</h4><span class="task__tag">single-arm · ALOHA</span></div><p>Grasp a deformable object and drop it in a pot.</p></div>
       </div>
 
       <!-- Towel Flinging -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/towel-fling_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/towel-fling_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab" data-src="videos/towel-fling_gr00tn1.5_te.mp4">TE</button>
             <button class="vid-tab" data-src="videos/towel-fling_gr00tn1.5_rtc.mp4">RTC</button>
@@ -380,7 +394,7 @@
       <!-- Shorts Folding -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/shorts-folding_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/shorts-folding_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab" data-src="videos/shorts-folding_gr00tn1.5_te.mp4">TE</button>
             <button class="vid-tab" data-src="videos/shorts-folding_gr00tn1.5_rtc.mp4">RTC</button>
@@ -393,7 +407,7 @@
       <!-- Part Placing -->
       <div class="task reveal">
         <div class="vid">
-          <video class="task-vid" src="videos/part-placing_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
+          <video class="task-vid" preload="none" data-src="videos/part-placing_gr00tn1.5_paint.mp4" autoplay muted loop playsinline></video>
           <div class="vid-tabs">
             <button class="vid-tab" data-src="videos/part-placing_gr00tn1.5_te.mp4">TE</button>
             <button class="vid-tab" data-src="videos/part-placing_gr00tn1.5_rtc.mp4">RTC</button>
@@ -406,21 +420,44 @@
   </div>
 </section>
 
-<!-- FOOTER -->
+<!-- ============================ FOOTER ============================ -->
 <footer class="foot">
   <div class="wrap foot__inner">
     <div>
       <strong style="font-family:var(--font-mono);color:var(--ink)">PAINT</strong> — Prefix-Anchored Initial Noise<br />
-      <span style="font-size:13px">Submitted to CoRL 2026 · placeholder page for an anonymized submission</span>
+      <span style="font-size:13px">Under Review · placeholder page for an anonymized submission</span>
     </div>
     <div style="display:flex;gap:20px">
-      <a href="#">Paper</a><a href="#">arXiv</a><a href="#">Code</a><a href="#">Video</a>
+      <a href="paper/PAINT.pdf" target="_blank" rel="noopener">Paper</a><a href="#">arXiv</a><a href="#">Code</a><a href="#">Video</a>
     </div>
   </div>
 </footer>
 
+<!-- ============================ TWEAKS ============================ -->
+<div id="tweaks-root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="paint-tweaks.jsx"></script>
 <script src="paint-diagram.js"></script>
 <script>
+  // Lazy-load videos: only fetch when card scrolls into view
+  var vidIO = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var vid = e.target;
+      if (vid.dataset.src) {
+        vid.src = vid.dataset.src;
+        delete vid.dataset.src;
+        vid.play();
+      }
+      vidIO.unobserve(vid);
+    });
+  }, { rootMargin: "200px" });
+  document.querySelectorAll(".task-vid").forEach(function (v) { vidIO.observe(v); });
+
   // Video tab switching
   document.querySelectorAll(".task").forEach(function (card) {
     var vid = card.querySelector(".task-vid");
