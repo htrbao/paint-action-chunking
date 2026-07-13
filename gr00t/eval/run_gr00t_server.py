@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 import json
 import os
 
@@ -49,6 +50,10 @@ class ServerConfig:
     use_sim_policy_wrapper: bool = False
     """Whether to use the sim policy wrapper"""
 
+    smooth_option: Literal["repaint-euler", ""] = ""
+    """Smooth option for the action generation. Options are 'repaint' for PAINT or empty string for no smoothing."""
+
+
 
 def main(config: ServerConfig):
     print("Starting GR00T inference server...")
@@ -57,6 +62,7 @@ def main(config: ServerConfig):
     print(f"  Device: {config.device}")
     print(f"  Host: {config.host}")
     print(f"  Port: {config.port}")
+    print(f"  Smooth option: {config.smooth_option}")
 
     # check if the model path exists
     if config.model_path.startswith("/") and not os.path.exists(config.model_path):
@@ -69,6 +75,7 @@ def main(config: ServerConfig):
             model_path=config.model_path,
             device=config.device,
             strict=config.strict,
+            smooth_option=config.smooth_option
         )
     elif config.dataset_path is not None:
         if config.modality_config_path is None:
