@@ -102,7 +102,7 @@ class Gr00tPolicy(BasePolicy):
         assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         self.language_key = language_keys[0]
 
-        if self.smooth_option == "repaint":
+        if self.smooth_option == "repaint-euler":
             self.prev_action_chunk = None
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
