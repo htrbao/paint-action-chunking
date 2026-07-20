@@ -86,7 +86,7 @@ class BasePolicy(ABC):
         if self.strict:
             self.check_observation(observation)
         if self.smooth_option == "repaint":
-            self._get_repaint_action(observation, options)
+            action, info = self._get_repaint_action(observation, options)
         elif self.smooth_option == "":
             action, info = self._get_action(observation, options)
         else:

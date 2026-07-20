@@ -380,23 +380,12 @@ class Gr00tPolicy(BasePolicy):
         Returns:
             Tuple of (actions_dict, info_dict)
         """
-        if self.smooth_option in ["repaint"]:
-            inference_delay = observation.get("inference_delay", None)
-            prefix_attention_horizon = observation.get("prefix_attention_horizon", None)
-            execute_horizon = observation.get("execute_horizon", None)
-            actual_action_dim = observation.get("actual_action_dim", None)
-            observation = observation.get("observations", None)
+        inference_delay = observation.get("inference_delay", None)
+        prefix_attention_horizon = observation.get("prefix_attention_horizon", None)
+        execute_horizon = observation.get("execute_horizon", None)
+        actual_action_dim = observation.get("actual_action_dim", None)
+        observation = observation.get("observations", None)
 
-            saved_prev_action_chunk = self.prev_action_chunk
-            if self.prev_action_chunk is not None:
-                self.prev_action_chunk = torch.concat(
-                    (self.prev_action_chunk[:, execute_horizon:],
-                    torch.zeros(
-                        [self.prev_action_chunk.shape[0], execute_horizon, self.prev_action_chunk.shape[-1]],
-                        device=self.prev_action_chunk.device,
-                    )),
-                    dim=1,
-                )
         # Step 1: Split batched observation into individual observations
         unbatched_observations = self._unbatch_observation(observation)
         processed_inputs = []
@@ -415,12 +404,35 @@ class Gr00tPolicy(BasePolicy):
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():
-            model_pred = self.model.get_repaint_action(
-                **collated_inputs,
-                inference_delay=inference_delay,
-                prefix_attention_horizon=prefix_attention_horizon,
-                actual_action_dim=actual_action_dim,
-            )
+            if self.prev_action_chunk is None:
+                # No previous chunk to anchor the prefix to yet: run a plain
+                # forward pass. prev_action_chunk is seeded below so repaint
+                # kicks in starting with the next call.
+                model_pred = self.model.get_action(**collated_inputs)
+            else:
+                self.prev_action_chunk = torch.concat(
+                    (
+                        self.prev_action_chunk[:, execute_horizon:],
+                        torch.zeros(
+                            [
+                                self.prev_action_chunk.shape[0],
+                                execute_horizon,
+                                self.prev_action_chunk.shape[-1],
+                            ],
+                            device=self.prev_action_chunk.device,
+                            dtype=self.prev_action_chunk.dtype,
+                        ),
+                    ),
+                    dim=1,
+                )
+                model_pred = self.model.get_repaint_action(
+                    **collated_inputs,
+                    prev_action_chunk=self.prev_action_chunk,
+                    inference_delay=inference_delay,
+                    prefix_attention_horizon=prefix_attention_horizon,
+                    actual_action_dim=actual_action_dim,
+                )
+        self.prev_action_chunk = model_pred["action_pred"]
         normalized_action = model_pred["action_pred"].float()
 
         # Step 5: Decode actions from normalized space back to physical units
