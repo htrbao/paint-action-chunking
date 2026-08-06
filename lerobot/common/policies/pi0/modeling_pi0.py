@@ -1071,7 +1071,7 @@ class PI0FlowMatching(nn.Module):
             .unsqueeze(-1))
 
             if prev_chunk_left_over.shape[1] < action_chunk_size or prev_chunk_left_over.shape[2] < action_dim:
-                print(f"BEFORE ASSIGN: {x_t[:, :inference_delay, :prev_chunk_left_over.shape[2]]}")
+                print(f"BEFORE ASSIGN: {(x_t[:, :inference_delay, :prev_chunk_left_over.shape[2]] - prev_chunk_left_over[:, :inference_delay, :]).abs().mean()}")
                 padded = torch.zeros(action_chunk_size, action_dim).to(x_t.device)
                 padded[: prev_chunk_left_over.shape[1], : prev_chunk_left_over.shape[2]] = prev_chunk_left_over
                 prev_chunk_left_over = padded
