@@ -52,6 +52,20 @@ TensorRT HTTP Server Usage:
 
 Note: TensorRT engines must be built before running with --use-tensorrt flag.
 See deployment_scripts/README.md for instructions on building TensorRT engines.
+
+4. repaint-euler on TensorRT:
+
+    python scripts/inference_service.py --server --smooth-option repaint-euler \
+        --use-tensorrt --trt-engine-path gr00t_engine
+
+repaint-euler is gradient-free (three forward ODE passes, no vjp), so unlike
+--smooth-option rtc it composes with --use-tensorrt. Requests must carry the chunking
+context alongside the observation:
+
+    {"observations": obs, "inference_delay": 2, "execute_horizon": 3,
+     "prefix_attention_horizon": 13, "actual_action_dim": 14}
+
+See deployment_scripts/run_repaint_trt_server.sh for a ready-to-run launcher.
 """
 
 import time
@@ -108,6 +122,9 @@ class ArgsConfig:
 
     denoising_steps: int = 4
     """The number of denoising steps to use."""
+
+    debug_plots: bool = False
+    """Keep the per-request trajectory PNGs that the rtc/repaint path writes. Off by default: on a server they cost seconds and a file per request."""
 
     api_token: str = None
     """API token for authentication. If not provided, authentication is disabled."""
@@ -219,12 +236,33 @@ def main(args: ArgsConfig):
             print(f"  ViT dtype: {args.vit_dtype}")
             print(f"  LLM dtype: {args.llm_dtype}")
             print(f"  DiT dtype: {args.dit_dtype}")
-            from deployment_scripts.trt_model_forward import setup_tensorrt_engines
+            if args.smooth_option == "repaint-euler":
+                # Superset of setup_tensorrt_engines: also routes get_repaint_action
+                # through the engines. Possible because repaint-euler is gradient-free.
+                from deployment_scripts.trt_repaint_forward import (
+                    setup_tensorrt_engines_repaint as setup_tensorrt_engines,
+                )
+            else:
+                from deployment_scripts.trt_model_forward import setup_tensorrt_engines
 
             setup_tensorrt_engines(
                 policy, args.trt_engine_path, args.vit_dtype, args.llm_dtype, args.dit_dtype
             )
             print("TensorRT engines loaded successfully!")
+
+        if args.smooth_option in ["rtc", "training-time-rtc", "repaint-euler"]:
+            # Gr00tPolicy.__init__ only initializes chunk state for smooth_option="rtc",
+            # and the HTTP server exposes no reset endpoint, so prime it here or the very
+            # first request fails on a missing prev_action_chunk.
+            policy.reset()
+
+            # That same code path renders and saves a 300-dpi PNG on every call. Fine for
+            # offline eval, ruinous for a server: seconds of matplotlib per request, one
+            # file per request, and the figures are never closed. Off in server mode.
+            if not args.debug_plots:
+                import gr00t.model.policy as _policy_module
+
+                _policy_module.plot_trajectory = lambda *a, **kw: None
 
         # Start the server
         if args.http_server:
