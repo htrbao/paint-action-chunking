@@ -56,6 +56,14 @@ def eagle_tensorrt_forward(self, vl_input):
             vit_embeds.shape[0], -1, vit_embeds.shape[-1]
         )  # torch.Size([B, 16, 16, 4096]) -> torch.Size([B, 256, 4096])
 
+    # The ViT engine emits fp16, but `mlp1` survives as a PyTorch module and keeps the
+    # dtype the checkpoint was loaded with -- bf16 by default (COMPUTE_DTYPE in
+    # gr00t/model/policy.py). Match the module rather than assuming either side, so this
+    # holds whether the policy was loaded in bf16 or fp16.
+    mlp1_dtype = next(self.eagle_model.mlp1.parameters()).dtype
+    if vit_embeds.dtype != mlp1_dtype:
+        vit_embeds = vit_embeds.to(mlp1_dtype)
+
     if self.eagle_model.mlp_checkpoint and vit_embeds.requires_grad:
         vit_embeds = cp.checkpoint(self.eagle_model.mlp1, vit_embeds)
     else:

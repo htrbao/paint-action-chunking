@@ -107,7 +107,13 @@ def action_head_tensorrt_repaint_forward(
     num_steps = self.num_inference_timesteps
     dt = 1.0 / num_steps
 
-    future_tokens = self.future_tokens.weight.unsqueeze(0).expand(batch_size, -1, -1)
+    # `future_tokens` is a surviving PyTorch parameter and carries the checkpoint dtype
+    # (bf16 by default), while state_features/action_features come out of the engines as
+    # fp16. Cast here rather than relying on torch.cat's type promotion, which differs
+    # across versions and would silently widen the concat to fp32.
+    future_tokens = (
+        self.future_tokens.weight.unsqueeze(0).expand(batch_size, -1, -1).to(dtype)
+    )
 
     # prefix_mask[b, i, 0] = True iff i < d  ->  broadcastable over [B, H, D]
     prefix_mask = (
