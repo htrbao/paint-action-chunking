@@ -413,10 +413,31 @@ When direct optimization is insufficient, use one or more of the following:
 > **Prefix-consistent chunking status (experimental):** Asynchronous inference is supported today.
 > Two prefix-consistent samplers are wired through `Gr00tPolicy` and the server-client path:
 > **PAINT** (`smooth_option="repaint"` / `"repaint-euler"`), which pins the committed prefix by
-> inverting the learned flow, and **RTC** (`smooth_option="rtc"`), the guidance baseline. Enable
-> either per request via `policy.get_action(obs, options={...})`, or server-wide with
-> `run_gr00t_server.py --smooth-option repaint-euler --execution-horizon N`. See
+> inverting the learned flow, and **RTC** (`smooth_option="rtc"`), the guidance baseline. See
 > `gr00t/model/gr00t_n1d7/paint.py`.
+>
+> Select the sampler when starting the server:
+>
+> ```bash
+> python gr00t/eval/run_gr00t_server.py --model-path <ckpt> --embodiment-tag <tag> \
+>     --smooth-option repaint-euler
+> ```
+>
+> Everything else is **per request**, because it varies per inference — most obviously
+> `inference_delay`, which is the measured latency of the call still in flight:
+>
+> ```python
+> action, info = client.get_action(obs, options={
+>     "execution_horizon": 8,      # steps the robot actually executed since the last call
+>     "inference_delay": measured, # steps already committed when this chunk lands
+>     # optional: prefix_attention_horizon, prefix_attention_schedule, actual_action_dim,
+>     # and for rtc: max_guidance_weight, sigma_d_o
+> })
+> ```
+>
+> Per-request options override the server default, so a client can also switch sampler or opt out
+> with `{"smooth_option": None}`. `info` carries the sampler diagnostics
+> (`prefix_error`, `repaint_applied`).
 >
 > The previous action chunk is **per-policy state**, so serve one robot per server process and call
 > `reset()` at each episode start.

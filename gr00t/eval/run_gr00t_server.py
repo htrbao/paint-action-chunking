@@ -73,33 +73,18 @@ class ServerConfig:
 
     execution_horizon: int | None = None
     """Policy execution horizon during inference. Required when --dataset-path is set
-    (ReplayPolicy) or when --smooth-option is set (prefix-consistent chunking)."""
+    (ReplayPolicy). With --smooth-option it is only a fallback: clients should send
+    the real value per request, since it must match what the robot actually executed."""
 
-    # Prefix-consistent chunking (PAINT / RTC). Applied server-side to every
-    # request, so clients that send no options of their own still get it.
+    # Which sampler to serve. Every other knob (inference_delay,
+    # prefix_attention_horizon/schedule, actual_action_dim, max_guidance_weight,
+    # sigma_d_o) is deliberately *not* here: they vary per inference — most
+    # obviously inference_delay, which is the measured latency of the call still
+    # in flight — so clients pass them per request via
+    # ``PolicyClient.get_action(obs, options={...})``, which overrides this default.
     smooth_option: str | None = None
     """Prefix-consistent chunking mode: 'repaint'/'repaint-euler' (PAINT) or 'rtc'
-    (guidance baseline). Leave unset for the plain sampler. Requires --execution-horizon."""
-
-    inference_delay: int | None = None
-    """Steps already committed on the robot when a new chunk lands. Defaults to
-    --execution-horizon, i.e. assume a full chunk period of latency."""
-
-    prefix_attention_horizon: int | None = None
-    """Where the blend stops attending to the previous chunk.
-    Defaults to (model action horizon - --execution-horizon)."""
-
-    prefix_attention_schedule: str = "exp"
-    """Blend schedule: 'exp', 'linear', 'ones', or 'zeros'."""
-
-    actual_action_dim: int | None = None
-    """Unpadded action dimension. RTC skips guidance on the padded tail."""
-
-    max_guidance_weight: float = 5.0
-    """RTC only: upper clamp on the guidance coefficient."""
-
-    sigma_d_o: float = 5.0
-    """RTC only: assumed ratio of data to observation noise scale."""
+    (guidance baseline). Leave unset for the plain sampler."""
 
     # Server configs
     host: str = "0.0.0.0"
@@ -116,34 +101,26 @@ class ServerConfig:
 
 
 def _build_default_options(config: "ServerConfig") -> dict | None:
-    """Turn the prefix-consistent chunking flags into policy default options."""
+    """Server-side fallback options for prefix-consistent chunking.
+
+    Only the sampler choice, and optionally an execution horizon, are set here.
+    Everything else is left absent so the policy's own defaults apply until a
+    client overrides them per request.
+    """
     if config.smooth_option is None:
         return None
     if config.smooth_option not in SMOOTH_OPTIONS:
         raise ValueError(
             f"--smooth-option must be one of {SMOOTH_OPTIONS}, got {config.smooth_option!r}."
         )
-    if config.execution_horizon is None:
-        raise ValueError(
-            "--execution-horizon is required when --smooth-option is set: it sets how far "
-            "the previous chunk is shifted between calls and where the prefix blend ends. "
-            "Use the number of steps the robot actually executes per inference."
-        )
-    if config.execution_horizon <= 0:
-        raise ValueError(f"--execution-horizon must be positive; got {config.execution_horizon}.")
 
-    options = {
-        "smooth_option": config.smooth_option,
-        "execution_horizon": config.execution_horizon,
-        "prefix_attention_schedule": config.prefix_attention_schedule,
-        "max_guidance_weight": config.max_guidance_weight,
-        "sigma_d_o": config.sigma_d_o,
-    }
-    # Leave these out when unset so the policy applies its own defaults.
-    for key in ("inference_delay", "prefix_attention_horizon", "actual_action_dim"):
-        value = getattr(config, key)
-        if value is not None:
-            options[key] = value
+    options: dict = {"smooth_option": config.smooth_option}
+    if config.execution_horizon is not None:
+        if config.execution_horizon <= 0:
+            raise ValueError(
+                f"--execution-horizon must be positive; got {config.execution_horizon}."
+            )
+        options["execution_horizon"] = config.execution_horizon
     return options
 
 
@@ -158,6 +135,13 @@ def main(config: ServerConfig):
     print(f"  Port: {config.port}")
     if default_options is not None:
         print(f"  Prefix-consistent chunking: {default_options}")
+        print(
+            "  Per-request options (inference_delay, execution_horizon, "
+            "prefix_attention_horizon/schedule, actual_action_dim, max_guidance_weight, "
+            "sigma_d_o) come from the client: policy.get_action(obs, options={...})."
+        )
+        if "execution_horizon" not in default_options:
+            print("  execution_horizon is unset server-side, so each request must carry it.")
         print(
             "  NOTE: the previous action chunk is per-server state. Serve one robot "
             "per server, and have the client call reset() at each episode start."
