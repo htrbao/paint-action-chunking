@@ -144,6 +144,7 @@ def evaluate_single_trajectory(
     save_plot_path=None,
     smooth_option: str | None = None,
     inference_delay: int | None = None,
+    async_execution: bool | None = None,
 ):
     # Ensure steps doesn't exceed trajectory length
     traj = loader[traj_id]
@@ -171,13 +172,28 @@ def evaluate_single_trajectory(
     # Prefix-consistent chunking carries state across calls, so start each
     # trajectory from a clean slate.
     options = None
+    delay = execution_horizon if inference_delay is None else inference_delay
     if smooth_option is not None:
         policy.reset()
         options = {
             "smooth_option": smooth_option,
             "execution_horizon": execution_horizon,
-            "inference_delay": (execution_horizon if inference_delay is None else inference_delay),
+            "inference_delay": delay,
         }
+
+    # Prefix-consistent chunking only shows up at the seam between a chunk still
+    # in flight and its replacement, so simulating the delay is what makes the
+    # metrics meaningful. Default it on whenever a sampler is selected.
+    if async_execution is None:
+        async_execution = smooth_option is not None
+    if async_execution and not 0 <= delay <= execution_horizon:
+        raise ValueError(
+            f"inference_delay must be in [0, execution_horizon={execution_horizon}] for "
+            f"async execution, got {delay}."
+        )
+
+    prev_chunk = None
+    prefix_gaps: list[float] = []
 
     modality_configs = deepcopy(loader.modality_configs)
     modality_configs.pop("action")
@@ -194,17 +210,53 @@ def evaluate_single_trajectory(
         parsed_obs = parse_observation_gr00t(obs, loader.modality_configs)
         _action_chunk, _ = policy.get_action(parsed_obs, options)
         action_chunk = parse_action_gr00t(_action_chunk)
-        for j in range(execution_horizon):
+
+        def step_action(chunk, j):
             # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
             # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
-            concat_pred_action = np.concatenate(
-                [
-                    np.atleast_1d(np.atleast_1d(action_chunk[f"action.{key}"])[j])
-                    for key in action_keys
-                ],
+            return np.concatenate(
+                [np.atleast_1d(np.atleast_1d(chunk[f"action.{key}"])[j]) for key in action_keys],
                 axis=0,
             )
-            pred_action_across_time.append(concat_pred_action)
+
+        if not async_execution or prev_chunk is None:
+            for j in range(execution_horizon):
+                pred_action_across_time.append(step_action(action_chunk, j))
+        else:
+            # The robot cannot act on this chunk until it exists, so for
+            # `delay` steps it keeps executing the one still in flight, then
+            # switches. Those `delay` steps are the committed prefix the new
+            # chunk had to agree with.
+            chunk_len = len(np.atleast_1d(action_chunk[f"action.{action_keys[0]}"]))
+            if execution_horizon + delay > chunk_len:
+                raise ValueError(
+                    f"async execution needs execution_horizon + inference_delay "
+                    f"({execution_horizon} + {delay}) <= predicted chunk length ({chunk_len}); "
+                    f"the in-flight chunk runs out of actions to execute during the delay."
+                )
+            for j in range(execution_horizon, execution_horizon + delay):
+                pred_action_across_time.append(step_action(prev_chunk, j))
+            for j in range(delay, execution_horizon):
+                pred_action_across_time.append(step_action(action_chunk, j))
+
+            # Prefix consistency: how far the new chunk drifts from the actions
+            # already committed. This is what PAINT minimizes; MSE against
+            # ground truth does not see it.
+            if delay > 0:
+                prefix_gaps.append(
+                    float(
+                        np.mean(
+                            [
+                                np.abs(
+                                    step_action(action_chunk, j)
+                                    - step_action(prev_chunk, execution_horizon + j)
+                                )
+                                for j in range(delay)
+                            ]
+                        )
+                    )
+                )
+        prev_chunk = action_chunk
 
     def extract_state_joints(traj: pd.DataFrame, columns: list[str]):
         np_dict = {}
@@ -227,6 +279,12 @@ def evaluate_single_trajectory(
     mae = np.mean(np.abs(gt_action_across_time - pred_action_across_time))
     logging.info(f"Unnormalized Action MSE across single traj: {mse}")
     logging.info(f"Unnormalized Action MAE across single traj: {mae}")
+    prefix_gap = float(np.mean(prefix_gaps)) if prefix_gaps else None
+    if prefix_gap is not None:
+        logging.info(
+            f"Prefix inconsistency at chunk boundaries (lower is better): {prefix_gap} "
+            f"over {len(prefix_gaps)} seams"
+        )
 
     logging.info(f"state_joints vs time {state_joints_across_time.shape}")
     logging.info(f"gt_action_joints vs time {gt_action_across_time.shape}")
@@ -244,7 +302,7 @@ def evaluate_single_trajectory(
         save_plot_path=save_plot_path or f"/tmp/open_loop_eval/traj_{traj_id}.jpeg",
     )
 
-    return mse, mae
+    return mse, mae, prefix_gap
 
 
 @dataclass
@@ -292,6 +350,12 @@ class ArgsConfig:
     inference_delay: int | None = None
     """Steps assumed already committed when a new chunk lands, for
     --smooth-option. Defaults to --execution-horizon."""
+
+    async_execution: bool | None = None
+    """Simulate asynchronous execution: keep executing the in-flight chunk for
+    --inference-delay steps before switching to the new one. This is what creates
+    the chunk-boundary seam that prefix-consistent sampling targets, and it enables
+    the prefix-inconsistency metric. Defaults to on when --smooth-option is set."""
 
 
 def main(args: ArgsConfig):
@@ -355,6 +419,7 @@ def main(args: ArgsConfig):
 
     all_mse = []
     all_mae = []
+    all_prefix_gap = []
 
     for traj_id in args.traj_ids:
         if traj_id >= len(dataset):
@@ -362,7 +427,7 @@ def main(args: ArgsConfig):
             continue
 
         logging.info(f"Running trajectory: {traj_id}")
-        mse, mae = evaluate_single_trajectory(
+        mse, mae, prefix_gap = evaluate_single_trajectory(
             policy,
             dataset,
             traj_id,
@@ -372,17 +437,25 @@ def main(args: ArgsConfig):
             execution_horizon=args.execution_horizon,
             smooth_option=args.smooth_option,
             inference_delay=args.inference_delay,
+            async_execution=args.async_execution,
             save_plot_path=args.save_plot_path,
         )
         logging.info(f"MSE for trajectory {traj_id}: {mse}, MAE: {mae}")
         all_mse.append(mse)
         all_mae.append(mae)
+        if prefix_gap is not None:
+            all_prefix_gap.append(prefix_gap)
 
     if all_mse:
         avg_mse = np.mean(np.array(all_mse))
         avg_mae = np.mean(np.array(all_mae))
         logging.info(f"Average MSE across all trajs: {avg_mse}")
         logging.info(f"Average MAE across all trajs: {avg_mae}")
+        if all_prefix_gap:
+            logging.info(
+                f"Average prefix inconsistency across all trajs: "
+                f"{np.mean(np.array(all_prefix_gap))}"
+            )
     else:
         logging.info("No valid trajectories were evaluated.")
     logging.info("Done")
