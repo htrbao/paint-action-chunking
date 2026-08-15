@@ -133,6 +133,37 @@ def parse_action_gr00t(action: dict[str, Any]) -> dict[str, Any]:
     return {f"action.{key}": action[key][0] for key in action}
 
 
+def _resolve_action_stride(modality_configs: dict[str, Any]) -> int:
+    """Timestep spacing between consecutive entries of the predicted chunk.
+
+    Returns 1 for the usual dense window ``[0, 1, ..., H-1]``. A checkpoint
+    trained on a subsampled window such as ``[0, 2, ..., 30]`` returns 2: entry
+    ``j`` of the chunk is the action for timestep ``j * stride``, so scoring it
+    against a dense ground-truth timeline would compare the wrong rows.
+
+    Only windows that start at 0 and are evenly spaced are supported; anything
+    else has no single stride and cannot be aligned this way.
+    """
+    delta = [int(d) for d in modality_configs["action"].delta_indices]
+    if not delta:
+        raise ValueError("policy declared an empty action.delta_indices.")
+    if len(delta) == 1:
+        return 1
+    if delta[0] != 0:
+        raise ValueError(
+            f"action.delta_indices={delta} must start at 0; the eval executes each "
+            "chunk starting from the observation timestep."
+        )
+    strides = {b - a for a, b in zip(delta, delta[1:])}
+    if len(strides) != 1 or next(iter(strides)) < 1:
+        raise ValueError(
+            f"action.delta_indices={delta} is not evenly spaced. The eval aligns "
+            "predictions to ground truth by a single stride, which an irregular "
+            "window does not have."
+        )
+    return next(iter(strides))
+
+
 def evaluate_single_trajectory(
     policy: BasePolicy,
     loader: LeRobotEpisodeLoader,
@@ -162,12 +193,29 @@ def evaluate_single_trajectory(
         loader.modality_configs["action"].modality_keys if modality_keys is None else modality_keys
     )
 
-    # Fail fast if the open-loop stride doesn't fit the model's predicted chunk
-    # (also rejects a non-contiguous action window, which the linear indexing
-    # below would silently mis-execute).
-    PolicyHorizonSpec.from_modality_config(
-        loader.modality_configs, n_action_steps=execution_horizon
-    )
+    # Resolve the action window. A checkpoint may predict a temporally
+    # subsampled chunk (e.g. delta_indices=[0, 2, ..., 30]: 16 actions at
+    # stride 2 spanning 32 timesteps), in which case chunk[j] is the action for
+    # timestep j * stride, not j.
+    action_stride = _resolve_action_stride(loader.modality_configs)
+    if action_stride == 1:
+        # Fail fast if the open-loop stride doesn't fit the model's predicted
+        # chunk. PolicyHorizonSpec speaks for consumers that index the chunk
+        # linearly against a dense timeline, which only holds at stride 1.
+        PolicyHorizonSpec.from_modality_config(
+            loader.modality_configs, n_action_steps=execution_horizon
+        )
+    else:
+        chunk_len = len(loader.modality_configs["action"].delta_indices)
+        if not 1 <= execution_horizon <= chunk_len:
+            raise ValueError(
+                f"execution_horizon={execution_horizon} must satisfy "
+                f"1 <= execution_horizon <= action_horizon={chunk_len}."
+            )
+        logging.info(
+            f"Action chunk is subsampled at stride {action_stride}; evaluating every "
+            f"{action_stride}-th timestep, which is where the policy actually predicts."
+        )
 
     # Prefix-consistent chunking carries state across calls, so start each
     # trajectory from a clean slate.
@@ -197,7 +245,9 @@ def evaluate_single_trajectory(
 
     modality_configs = deepcopy(loader.modality_configs)
     modality_configs.pop("action")
-    for step_count in range(0, actual_steps, execution_horizon):
+    # Executing `execution_horizon` chunk entries advances the dense timeline by
+    # that many *strided* steps.
+    for step_count in range(0, actual_steps, execution_horizon * action_stride):
         data_point = extract_step_data(traj, step_count, modality_configs, embodiment_tag)
         logging.info(f"inferencing at step: {step_count}")
         obs = {}
@@ -264,12 +314,21 @@ def evaluate_single_trajectory(
             np_dict[column] = np.vstack([arr for arr in traj[column]])
         return np.concatenate([np_dict[column] for column in columns], axis=-1)
 
-    # plot the joints
-    state_joints_across_time = extract_state_joints(traj, [f"state.{key}" for key in state_keys])
-    gt_action_across_time = extract_state_joints(traj, [f"action.{key}" for key in action_keys])[
-        :actual_steps
+    # plot the joints. With a subsampled chunk the policy only predicts every
+    # action_stride-th timestep, so ground truth is subsampled to match: entry j
+    # of the prediction sequence lines up with dense timestep j * action_stride.
+    state_joints_across_time = extract_state_joints(traj, [f"state.{key}" for key in state_keys])[
+        :actual_steps:action_stride
     ]
-    pred_action_across_time = np.array(pred_action_across_time)[:actual_steps]
+    gt_action_across_time = extract_state_joints(traj, [f"action.{key}" for key in action_keys])[
+        :actual_steps:action_stride
+    ]
+    pred_action_across_time = np.array(pred_action_across_time)
+    # The last inference emits a full chunk, which can overrun the trajectory.
+    n_eval = min(len(gt_action_across_time), len(pred_action_across_time))
+    gt_action_across_time = gt_action_across_time[:n_eval]
+    pred_action_across_time = pred_action_across_time[:n_eval]
+    state_joints_across_time = state_joints_across_time[:n_eval]
     assert gt_action_across_time.shape == pred_action_across_time.shape, (
         f"gt_action: {gt_action_across_time.shape}, pred_action: {pred_action_across_time.shape}"
     )
