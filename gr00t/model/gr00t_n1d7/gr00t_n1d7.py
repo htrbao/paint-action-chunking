@@ -25,6 +25,14 @@ from transformers.feature_extraction_utils import BatchFeature
 import tree
 
 from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+from gr00t.model.gr00t_n1d7.paint import (
+    VelocityFn,
+    blend_prefix,
+    get_prefix_weights,
+    make_action_dim_mask,
+    repaint_sample,
+    rtc_sample,
+)
 from gr00t.model.modules.dit import AlternateVLDiT, DiT, SelfAttentionTransformer
 from gr00t.model.modules.embodiment_conditioned_mlp import (
     CategorySpecificMLP,
@@ -322,6 +330,60 @@ class Gr00tN1d7ActionHead(nn.Module):
 
         return BatchFeature(data={"backbone_features": vl_embeds, "state_features": state_features})
 
+    def _make_velocity_fn(
+        self,
+        backbone_features: torch.Tensor,
+        state_features: torch.Tensor,
+        embodiment_id: torch.Tensor,
+        backbone_output: BatchFeature,
+    ) -> VelocityFn:
+        """Build the per-step velocity closure used by every sampler.
+
+        Vanilla Euler, PAINT and RTC all go through this one closure, so a change
+        to the conditioning wiring cannot make them disagree about what model
+        they are integrating.
+        """
+        vl_embeds = backbone_features
+        batch_size = vl_embeds.shape[0]
+        device = vl_embeds.device
+
+        def velocity_fn(actions: torch.Tensor, t_cont: float) -> torch.Tensor:
+            t_discretized = int(t_cont * self.num_timestep_buckets)
+            timesteps_tensor = torch.full(
+                size=(batch_size,), fill_value=t_discretized, device=device
+            )
+
+            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
+            # Add position embedding.
+            if self.config.add_pos_embed:
+                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
+                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                action_features = action_features + pos_embs
+
+            # Join vision, language, state and action embedding along sequence dimension.
+            sa_embs = torch.cat((state_features, action_features), dim=1)
+
+            # Run model forward.
+            if self.config.use_alternate_vl_dit:
+                model_output = self.model(
+                    hidden_states=sa_embs,
+                    encoder_hidden_states=vl_embeds,
+                    timestep=timesteps_tensor,
+                    image_mask=backbone_output.image_mask,
+                    backbone_attention_mask=backbone_output.backbone_attention_mask,
+                )
+            else:
+                model_output = self.model(
+                    hidden_states=sa_embs,
+                    encoder_hidden_states=vl_embeds,
+                    timestep=timesteps_tensor,
+                )
+            pred = self.action_decoder(model_output, embodiment_id)
+
+            return pred[:, -self.action_horizon :]
+
+        return velocity_fn
+
     @torch.no_grad()
     def get_action_with_features(
         self,
@@ -393,43 +455,17 @@ class Gr00tN1d7ActionHead(nn.Module):
                 :,
             ] = ramp[None, :, None].to(device)
 
+        velocity_fn = self._make_velocity_fn(
+            backbone_features=vl_embeds,
+            state_features=state_features,
+            embodiment_id=embodiment_id,
+            backbone_output=backbone_output,
+        )
+
         # Run denoising steps.
         for t in range(self.num_inference_timesteps):
             t_cont = t / float(self.num_inference_timesteps)  # e.g. goes 0, 1/N, 2/N, ...
-            t_discretized = int(t_cont * self.num_timestep_buckets)
-
-            # Embed noised action trajectory.
-            timesteps_tensor = torch.full(
-                size=(batch_size,), fill_value=t_discretized, device=device
-            )
-            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
-            # Add position embedding.
-            if self.config.add_pos_embed:
-                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
-                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
-                action_features = action_features + pos_embs
-
-            # Join vision, language, state and action embedding along sequence dimension.
-            sa_embs = torch.cat((state_features, action_features), dim=1)
-
-            # Run model forward.
-            if self.config.use_alternate_vl_dit:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    timestep=timesteps_tensor,
-                    image_mask=backbone_output.image_mask,
-                    backbone_attention_mask=backbone_output.backbone_attention_mask,
-                )
-            else:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    timestep=timesteps_tensor,
-                )
-            pred = self.action_decoder(model_output, embodiment_id)
-
-            pred_velocity = pred[:, -self.action_horizon :]
+            pred_velocity = velocity_fn(actions, t_cont)
 
             # Update actions using euler integration.
             actions = actions + dt * pred_velocity * vel_strength
@@ -473,6 +509,194 @@ class Gr00tN1d7ActionHead(nn.Module):
             action_input=action_input,
             options=options,
         )
+
+    def _resolve_blend_end(self, prefix_attention_horizon: int | None) -> int:
+        """Where the prefix blend stops attending to the previous chunk.
+
+        Defaults to the full horizon. Callers that know their execution stride
+        (the policy does) pass ``action_horizon - execution_horizon``, so the
+        blend ends where the shifted previous chunk stops carrying real data.
+        """
+        if prefix_attention_horizon is None:
+            return self.config.action_horizon
+        return prefix_attention_horizon
+
+    def _prepare_prefix_sampling(
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
+        prev_action_chunk: torch.Tensor,
+    ) -> tuple[VelocityFn, torch.Tensor, torch.Tensor]:
+        """Shared setup: returns ``(velocity_fn, x_0, prev_action_chunk)``."""
+        features = self._encode_features(backbone_output, action_input)
+        vl_embeds = features.backbone_features
+        batch_size = vl_embeds.shape[0]
+
+        expected = (batch_size, self.config.action_horizon, self.action_dim)
+        prev_action_chunk = torch.as_tensor(
+            prev_action_chunk, device=vl_embeds.device, dtype=vl_embeds.dtype
+        )
+        if tuple(prev_action_chunk.shape) != expected:
+            raise ValueError(
+                f"prev_action_chunk must have shape {expected} "
+                f"(batch, action_horizon, max_action_dim), got {tuple(prev_action_chunk.shape)}"
+            )
+
+        velocity_fn = self._make_velocity_fn(
+            backbone_features=vl_embeds,
+            state_features=features.state_features,
+            embodiment_id=action_input.embodiment_id,
+            backbone_output=backbone_output,
+        )
+        x_0 = torch.randn(size=expected, dtype=vl_embeds.dtype, device=vl_embeds.device)
+        return velocity_fn, x_0, prev_action_chunk
+
+    @torch.no_grad()
+    def get_repaint_action(
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
+        prev_action_chunk: torch.Tensor,
+        *,
+        inference_delay: int,
+        prefix_attention_horizon: int | None = None,
+        prefix_attention_schedule: str = "exp",
+        use_prev_action: bool = True,
+        actual_action_dim: int | None = None,
+    ) -> BatchFeature:
+        """PAINT: sample a chunk whose committed prefix matches the previous one.
+
+        Gradient-free, three ODE sweeps (one when ``inference_delay == 0``, where
+        the extra sweeps are provably a no-op).
+
+        ``prev_action_chunk`` is [B, action_horizon, max_action_dim] in
+        *normalized* action space, already time-shifted so index 0 is the next
+        action to execute. ``inference_delay`` is how many leading steps are
+        already committed on the robot; ``use_prev_action`` blends the previous
+        chunk back in afterwards so the executed prefix is exactly continuous.
+
+        Returns ``action_pred`` plus a ``paint_info`` dict of diagnostics.
+        """
+        velocity_fn, x_0, prev_action_chunk = self._prepare_prefix_sampling(
+            backbone_output, action_input, prev_action_chunk
+        )
+
+        action_pred, info = repaint_sample(
+            velocity_fn,
+            x_0,
+            prev_action_chunk,
+            inference_delay=inference_delay,
+            num_steps=self.num_inference_timesteps,
+        )
+
+        action_pred = self._maybe_blend_prefix(
+            action_pred,
+            prev_action_chunk,
+            info,
+            use_prev_action=use_prev_action,
+            inference_delay=inference_delay,
+            prefix_attention_horizon=prefix_attention_horizon,
+            prefix_attention_schedule=prefix_attention_schedule,
+        )
+        info["actual_action_dim"] = actual_action_dim
+        logger.debug("PAINT sampling: %s", info)
+        return BatchFeature(data={"action_pred": action_pred, "paint_info": info})
+
+    def get_realtime_action(
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
+        prev_action_chunk: torch.Tensor,
+        *,
+        inference_delay: int,
+        prefix_attention_horizon: int | None = None,
+        prefix_attention_schedule: str = "exp",
+        max_guidance_weight: float = 5.0,
+        sigma_d_o: float = 5.0,
+        use_prev_action: bool = True,
+        actual_action_dim: int | None = None,
+    ) -> BatchFeature:
+        """Real-time chunking (RTC): the guidance baseline for PAINT.
+
+        Each Euler step is steered by a VJP of the one-step denoiser, so this
+        needs autograd and must **not** run inside ``torch.inference_mode()``.
+
+        Args and returns mirror :meth:`get_repaint_action`, plus the guidance
+        hyperparameters ``max_guidance_weight`` and ``sigma_d_o``.
+        """
+        # Conditioning is constant across steps and never differentiated (the
+        # VJP is w.r.t. the action iterate only), so encode it without a graph.
+        # rtc_sample re-enables grad where it is needed.
+        with torch.no_grad():
+            velocity_fn, x_0, prev_action_chunk = self._prepare_prefix_sampling(
+                backbone_output, action_input, prev_action_chunk
+            )
+
+        weights = get_prefix_weights(
+            inference_delay,
+            self._resolve_blend_end(prefix_attention_horizon),
+            self.config.action_horizon,
+            prefix_attention_schedule,
+            device=x_0.device,
+        )
+
+        action_pred, info = rtc_sample(
+            velocity_fn,
+            x_0,
+            prev_action_chunk,
+            weights,
+            num_steps=self.num_inference_timesteps,
+            max_guidance_weight=max_guidance_weight,
+            sigma_d_o=sigma_d_o,
+            action_dim_mask=make_action_dim_mask(x_0, actual_action_dim),
+        )
+
+        action_pred = self._maybe_blend_prefix(
+            action_pred,
+            prev_action_chunk,
+            info,
+            use_prev_action=use_prev_action,
+            inference_delay=inference_delay,
+            prefix_attention_horizon=prefix_attention_horizon,
+            prefix_attention_schedule=prefix_attention_schedule,
+        )
+        info["actual_action_dim"] = actual_action_dim
+        logger.debug("RTC sampling: %s", info)
+        return BatchFeature(data={"action_pred": action_pred.detach(), "paint_info": info})
+
+    def _maybe_blend_prefix(
+        self,
+        action_pred: torch.Tensor,
+        prev_action_chunk: torch.Tensor,
+        info: dict[str, Any],
+        *,
+        use_prev_action: bool,
+        inference_delay: int,
+        prefix_attention_horizon: int | None,
+        prefix_attention_schedule: str,
+    ) -> torch.Tensor:
+        """Blend the previous chunk back in and record the resulting prefix error."""
+        if not use_prev_action:
+            info["blended"] = False
+            return action_pred
+
+        weights = get_prefix_weights(
+            inference_delay,
+            self._resolve_blend_end(prefix_attention_horizon),
+            self.config.action_horizon,
+            prefix_attention_schedule,
+            device=action_pred.device,
+        )
+        blended = blend_prefix(action_pred, prev_action_chunk, weights)
+        info["blended"] = True
+        if inference_delay > 0:
+            info["prefix_error_after_blend"] = (
+                (blended[:, :inference_delay] - prev_action_chunk[:, :inference_delay])
+                .abs()
+                .mean()
+                .item()
+            )
+        return blended
 
     @property
     def device(self):
@@ -612,6 +836,54 @@ class Gr00tN1d7(PreTrainedModel):
         action_outputs = self.action_head.get_action(backbone_outputs, action_inputs, options)
 
         return action_outputs
+
+    def get_repaint_action(
+        self,
+        inputs: dict,
+        prev_action_chunk: torch.Tensor | None,
+        **kwargs: Any,
+    ) -> BatchFeature:
+        """Generate a prefix-consistent action chunk with PAINT.
+
+        Falls back to plain :meth:`get_action` on an episode's first chunk.
+
+        Runs under ``no_grad`` rather than ``inference_mode`` so the returned
+        chunk stays a normal tensor: callers carry it into the next call, which
+        may feed it to the RTC path's autograd graph — something inference-mode
+        tensors cannot do.
+
+        See :meth:`Gr00tN1d7ActionHead.get_repaint_action` for the keywords.
+        """
+        with torch.no_grad():
+            backbone_inputs, action_inputs = self.prepare_input(inputs)
+            backbone_outputs = self.backbone(backbone_inputs)
+            if prev_action_chunk is None:
+                return self.action_head.get_action(backbone_outputs, action_inputs)
+            return self.action_head.get_repaint_action(
+                backbone_outputs, action_inputs, prev_action_chunk, **kwargs
+            )
+
+    def get_realtime_action(
+        self,
+        inputs: dict,
+        prev_action_chunk: torch.Tensor | None,
+        **kwargs: Any,
+    ) -> BatchFeature:
+        """Generate a prefix-consistent action chunk with RTC guidance.
+
+        The backbone runs under ``no_grad``, not ``inference_mode``, because the
+        action head then needs autograd for its guidance VJPs.
+
+        See :meth:`Gr00tN1d7ActionHead.get_realtime_action` for the keywords.
+        """
+        with torch.no_grad():
+            backbone_inputs, action_inputs = self.prepare_input(inputs)
+            backbone_outputs = self.backbone(backbone_inputs)
+            if prev_action_chunk is None:
+                return self.action_head.get_action(backbone_outputs, action_inputs)
+        return self.action_head.get_realtime_action(
+            backbone_outputs, action_inputs, prev_action_chunk, **kwargs
+        )
 
     @property
     def device(self):

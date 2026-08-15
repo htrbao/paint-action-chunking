@@ -30,8 +30,15 @@ from transformers import AutoModel, AutoProcessor
 from gr00t.data.embodiment_tags import FINETUNE_ONLY_TAGS, POSTTRAIN_TAGS, EmbodimentTag
 from gr00t.data.interfaces import BaseProcessor
 from gr00t.data.types import MessageType, ModalityConfig, VLAStepData
+from gr00t.model.gr00t_n1d7.paint import resolve_prefix_attention_horizon, shift_action_chunk
 
 from .policy import BasePolicy, PolicyWrapper
+
+
+# Selectable via ``options["smooth_option"]``: PAINT, or the RTC baseline.
+REPAINT_OPTIONS = ("repaint", "repaint-euler")
+RTC_OPTIONS = ("rtc",)
+SMOOTH_OPTIONS = REPAINT_OPTIONS + RTC_OPTIONS
 
 
 def _rec_to_dtype(x: Any, dtype: torch.dtype) -> Any:
@@ -173,6 +180,10 @@ class Gr00tPolicy(BasePolicy):
         assert len(language_keys) >= 1, "At least one language key is required"
         assert len(language_delta_indices) == 1, "Only one language delta index is supported"
         self.language_key = language_keys[0]
+
+        # Previous chunk carried across calls, kept in *normalized* action space
+        # because that is where the flow-matching head denoises.
+        self._prev_action_chunk: torch.Tensor | None = None
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
         """Unbatch a batched observation into a list of single observations.
@@ -391,7 +402,9 @@ class Gr00tPolicy(BasePolicy):
 
         Args:
             observation: Batched observation dictionary
-            options: Optional parameters (currently unused)
+            options: Optional parameters. Setting ``smooth_option`` to one of
+                ``SMOOTH_OPTIONS`` enables prefix-consistent chunking; see
+                :meth:`_get_prefix_consistent_action` for the full option set.
 
         Returns:
             Tuple of (actions_dict, info_dict)
@@ -413,9 +426,16 @@ class Gr00tPolicy(BasePolicy):
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
 
         # Step 4: Run model inference to predict actions
-        with torch.inference_mode():
-            model_pred = self.model.get_action(**collated_inputs)
-        normalized_action = model_pred["action_pred"].float()
+        smooth_option = (options or {}).get("smooth_option")
+        if smooth_option is None:
+            with torch.inference_mode():
+                model_pred = self.model.get_action(**collated_inputs)
+            normalized_action = model_pred["action_pred"].float()
+            info: dict[str, Any] = {}
+        else:
+            normalized_action, info = self._get_prefix_consistent_action(
+                collated_inputs, smooth_option, options or {}
+            )
 
         # Step 5: Decode actions from normalized space back to physical units
         batched_states = {}
@@ -429,7 +449,93 @@ class Gr00tPolicy(BasePolicy):
         casted_action = {
             key: value.astype(np.float32) for key, value in unnormalized_action.items()
         }
-        return casted_action, {}
+        return casted_action, info
+
+    def _get_prefix_consistent_action(
+        self,
+        collated_inputs: dict[str, Any],
+        smooth_option: str,
+        options: dict[str, Any],
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Run PAINT or RTC, carrying the previous chunk across calls.
+
+        Keeps the previous chunk in normalized action space, time-shifts it by
+        however many steps were executed, and hands it to the sampler as the
+        prefix constraint.
+
+        Recognized ``options`` keys:
+            smooth_option: ``"repaint"``/``"repaint-euler"`` (PAINT) or ``"rtc"``.
+            execution_horizon: steps of each chunk actually executed before
+                re-planning. Required — it sets the shift and the blend cutoff.
+            inference_delay: steps already committed when the new chunk lands.
+                Defaults to ``execution_horizon``.
+            prefix_attention_horizon: where the blend stops attending to the
+                previous chunk. Defaults to ``action_horizon - execution_horizon``.
+            prefix_attention_schedule: ``"exp"`` (default), ``"linear"``,
+                ``"ones"``, or ``"zeros"``.
+            use_prev_action: blend the previous chunk back in (default True).
+            actual_action_dim: unpadded action dim; RTC skips guidance on the pad.
+            max_guidance_weight / sigma_d_o: RTC guidance hyperparameters.
+
+        Returns:
+            Tuple of (normalized_action [B, H, D] float32, info dict).
+        """
+        if smooth_option not in SMOOTH_OPTIONS:
+            raise ValueError(
+                f"Unknown smooth_option {smooth_option!r}. Expected one of {SMOOTH_OPTIONS}."
+            )
+
+        execution_horizon = options.get("execution_horizon")
+        if execution_horizon is None:
+            raise ValueError(
+                "options['execution_horizon'] is required for prefix-consistent "
+                "chunking: it sets both how far the previous chunk is shifted and "
+                "where the prefix blend ends."
+            )
+
+        action_horizon = self.model.action_head.config.action_horizon
+        inference_delay = options.get("inference_delay", execution_horizon)
+        prefix_attention_horizon = resolve_prefix_attention_horizon(
+            options.get("prefix_attention_horizon"), action_horizon, execution_horizon
+        )
+
+        # Advance the previous chunk so index 0 is the next action due.
+        prev_action_chunk = self._prev_action_chunk
+        if prev_action_chunk is not None:
+            prev_action_chunk = shift_action_chunk(prev_action_chunk, execution_horizon)
+
+        common = dict(
+            inference_delay=inference_delay,
+            prefix_attention_horizon=prefix_attention_horizon,
+            prefix_attention_schedule=options.get("prefix_attention_schedule", "exp"),
+            use_prev_action=options.get("use_prev_action", True),
+            actual_action_dim=options.get("actual_action_dim"),
+        )
+
+        if smooth_option in REPAINT_OPTIONS:
+            # No inference_mode: the model already runs under no_grad, and the
+            # carried chunk must stay a normal tensor in case the next call uses
+            # the RTC path.
+            model_pred = self.model.get_repaint_action(
+                **collated_inputs, prev_action_chunk=prev_action_chunk, **common
+            )
+        else:
+            # RTC guidance needs autograd, so no inference_mode here either.
+            model_pred = self.model.get_realtime_action(
+                **collated_inputs,
+                prev_action_chunk=prev_action_chunk,
+                max_guidance_weight=options.get("max_guidance_weight", 5.0),
+                sigma_d_o=options.get("sigma_d_o", 5.0),
+                **common,
+            )
+
+        normalized_action = model_pred["action_pred"].detach().float()
+        self._prev_action_chunk = normalized_action
+
+        info = dict(model_pred.get("paint_info") or {})
+        info["smooth_option"] = smooth_option
+        info["first_chunk"] = prev_action_chunk is None
+        return normalized_action, info
 
     def check_action(self, action: dict[str, Any]) -> None:
         """Validate that the action has the correct structure and types.
@@ -482,12 +588,16 @@ class Gr00tPolicy(BasePolicy):
     def reset(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         """Reset the policy to its initial state.
 
+        Drops the carried chunk so the next episode starts unconstrained rather
+        than consistent with the last episode's final chunk.
+
         Args:
             options: Dictionary containing the options for the reset
 
         Returns:
             Dictionary containing the info after resetting the policy
         """
+        self._prev_action_chunk = None
         return {}
 
 

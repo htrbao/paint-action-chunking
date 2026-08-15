@@ -142,6 +142,8 @@ def evaluate_single_trajectory(
     steps=300,
     execution_horizon=16,
     save_plot_path=None,
+    smooth_option: str | None = None,
+    inference_delay: int | None = None,
 ):
     # Ensure steps doesn't exceed trajectory length
     traj = loader[traj_id]
@@ -166,6 +168,17 @@ def evaluate_single_trajectory(
         loader.modality_configs, n_action_steps=execution_horizon
     )
 
+    # Prefix-consistent chunking carries state across calls, so start each
+    # trajectory from a clean slate.
+    options = None
+    if smooth_option is not None:
+        policy.reset()
+        options = {
+            "smooth_option": smooth_option,
+            "execution_horizon": execution_horizon,
+            "inference_delay": (execution_horizon if inference_delay is None else inference_delay),
+        }
+
     modality_configs = deepcopy(loader.modality_configs)
     modality_configs.pop("action")
     for step_count in range(0, actual_steps, execution_horizon):
@@ -179,7 +192,7 @@ def evaluate_single_trajectory(
         for language_key in loader.modality_configs["language"].modality_keys:
             obs[language_key] = data_point.text
         parsed_obs = parse_observation_gr00t(obs, loader.modality_configs)
-        _action_chunk, _ = policy.get_action(parsed_obs)
+        _action_chunk, _ = policy.get_action(parsed_obs, options)
         action_chunk = parse_action_gr00t(_action_chunk)
         for j in range(execution_horizon):
             # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
@@ -272,6 +285,14 @@ class ArgsConfig:
     modality_keys: list[str] | None = None
     """List of modality keys to plot. If None, plot all keys."""
 
+    smooth_option: str | None = None
+    """Prefix-consistent chunking mode: 'repaint' (PAINT), 'repaint-euler'
+    (alias), or 'rtc' (guidance baseline). None runs the plain sampler."""
+
+    inference_delay: int | None = None
+    """Steps assumed already committed when a new chunk lands, for
+    --smooth-option. Defaults to --execution-horizon."""
+
 
 def main(args: ArgsConfig):
     args.embodiment_tag = EmbodimentTag.resolve(args.embodiment_tag)
@@ -349,6 +370,8 @@ def main(args: ArgsConfig):
             args.modality_keys,
             steps=args.steps,
             execution_horizon=args.execution_horizon,
+            smooth_option=args.smooth_option,
+            inference_delay=args.inference_delay,
             save_plot_path=args.save_plot_path,
         )
         logging.info(f"MSE for trajectory {traj_id}: {mse}, MAE: {mae}")
