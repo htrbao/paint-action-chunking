@@ -94,6 +94,7 @@ class Gr00tPolicy(BasePolicy):
         *,
         device: int | str,
         strict: bool = True,
+        default_options: dict[str, Any] | None = None,
     ):
         """Initialize the Gr00t Policy.
 
@@ -103,6 +104,10 @@ class Gr00tPolicy(BasePolicy):
             model_path: Path to the pretrained model checkpoint directory
             device: Device to run the model on (e.g., 'cuda:0', 0, 'cpu')
             strict: Whether to enforce strict input validation (default: True)
+            default_options: Options applied to every get_action call that does
+                not supply them. Lets a server enable prefix-consistent chunking
+                for clients that send no options of their own. Per-call options
+                win on conflict, so a client can still override or disable it.
         """
         # Import this to register all models.
         import gr00t.model  # noqa: F401
@@ -184,6 +189,7 @@ class Gr00tPolicy(BasePolicy):
         # Previous chunk carried across calls, kept in *normalized* action space
         # because that is where the flow-matching head denoises.
         self._prev_action_chunk: torch.Tensor | None = None
+        self.default_options = dict(default_options or {})
 
     def _unbatch_observation(self, value: dict[str, Any]) -> list[dict[str, Any]]:
         """Unbatch a batched observation into a list of single observations.
@@ -426,7 +432,8 @@ class Gr00tPolicy(BasePolicy):
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
 
         # Step 4: Run model inference to predict actions
-        smooth_option = (options or {}).get("smooth_option")
+        merged_options = {**self.default_options, **(options or {})}
+        smooth_option = merged_options.get("smooth_option")
         if smooth_option is None:
             with torch.inference_mode():
                 model_pred = self.model.get_action(**collated_inputs)
@@ -434,7 +441,7 @@ class Gr00tPolicy(BasePolicy):
             info: dict[str, Any] = {}
         else:
             normalized_action, info = self._get_prefix_consistent_action(
-                collated_inputs, smooth_option, options or {}
+                collated_inputs, smooth_option, merged_options
             )
 
         # Step 5: Decode actions from normalized space back to physical units
@@ -494,7 +501,19 @@ class Gr00tPolicy(BasePolicy):
             )
 
         action_horizon = self.model.action_head.config.action_horizon
+        # Reject horizons that would silently degrade to no prefix consistency:
+        # an execution_horizon at or past the chunk length shifts the whole
+        # carry away, leaving get_prefix_weights with an empty window.
+        if not 1 <= execution_horizon <= action_horizon:
+            raise ValueError(
+                f"execution_horizon must be in [1, {action_horizon}] for this model's "
+                f"action horizon, got {execution_horizon}."
+            )
         inference_delay = options.get("inference_delay", execution_horizon)
+        if not 0 <= inference_delay <= action_horizon:
+            raise ValueError(
+                f"inference_delay must be in [0, {action_horizon}], got {inference_delay}."
+            )
         prefix_attention_horizon = resolve_prefix_attention_horizon(
             options.get("prefix_attention_horizon"), action_horizon, execution_horizon
         )

@@ -410,7 +410,21 @@ When direct optimization is insufficient, use one or more of the following:
 
 **Recommended strategy**: `Asynchronous Inference + RTC` is usually the most effective.
 
-> **RTC status (experimental):** Asynchronous inference is supported today. RTC is currently only a low-level model primitive: `action_head.get_action(..., options={"rtc_overlap_steps": ..., "rtc_frozen_steps": ..., "rtc_ramp_rate": ...})` with the previous action fed back in (`gr00t/model/gr00t_n1d7/gr00t_n1d7.py`). It is **not wired into `Gr00tPolicy` or the server-client path** (there `options` is currently unused), and it has no tests or ready-made example — so the RTC steps below require manual integration.
+> **Prefix-consistent chunking status (experimental):** Asynchronous inference is supported today.
+> Two prefix-consistent samplers are wired through `Gr00tPolicy` and the server-client path:
+> **PAINT** (`smooth_option="repaint"` / `"repaint-euler"`), which pins the committed prefix by
+> inverting the learned flow, and **RTC** (`smooth_option="rtc"`), the guidance baseline. Enable
+> either per request via `policy.get_action(obs, options={...})`, or server-wide with
+> `run_gr00t_server.py --smooth-option repaint-euler --execution-horizon N`. See
+> `gr00t/model/gr00t_n1d7/paint.py`.
+>
+> The previous action chunk is **per-policy state**, so serve one robot per server process and call
+> `reset()` at each episode start.
+>
+> A separate, older low-level primitive also exists on the action head:
+> `action_head.get_action(..., options={"rtc_overlap_steps": ..., "rtc_frozen_steps": ...,
+> "rtc_ramp_rate": ...})` with the previous action fed back in. It is unrelated to the above and
+> still requires manual integration.
 
 #### Real-Time Chunking (RTC) Details
 

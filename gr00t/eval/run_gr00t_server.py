@@ -22,7 +22,7 @@ import sys
 
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.data.types import ModalityConfig
-from gr00t.policy.gr00t_policy import Gr00tPolicy
+from gr00t.policy.gr00t_policy import SMOOTH_OPTIONS, Gr00tPolicy
 from gr00t.policy.replay_policy import ReplayPolicy
 from gr00t.policy.server_client import PolicyServer
 import tyro
@@ -72,7 +72,34 @@ class ServerConfig:
     """Path to the modality configuration file"""
 
     execution_horizon: int | None = None
-    """Policy execution horizon during inference. Required when --dataset-path is set (ReplayPolicy)."""
+    """Policy execution horizon during inference. Required when --dataset-path is set
+    (ReplayPolicy) or when --smooth-option is set (prefix-consistent chunking)."""
+
+    # Prefix-consistent chunking (PAINT / RTC). Applied server-side to every
+    # request, so clients that send no options of their own still get it.
+    smooth_option: str | None = None
+    """Prefix-consistent chunking mode: 'repaint'/'repaint-euler' (PAINT) or 'rtc'
+    (guidance baseline). Leave unset for the plain sampler. Requires --execution-horizon."""
+
+    inference_delay: int | None = None
+    """Steps already committed on the robot when a new chunk lands. Defaults to
+    --execution-horizon, i.e. assume a full chunk period of latency."""
+
+    prefix_attention_horizon: int | None = None
+    """Where the blend stops attending to the previous chunk.
+    Defaults to (model action horizon - --execution-horizon)."""
+
+    prefix_attention_schedule: str = "exp"
+    """Blend schedule: 'exp', 'linear', 'ones', or 'zeros'."""
+
+    actual_action_dim: int | None = None
+    """Unpadded action dimension. RTC skips guidance on the padded tail."""
+
+    max_guidance_weight: float = 5.0
+    """RTC only: upper clamp on the guidance coefficient."""
+
+    sigma_d_o: float = 5.0
+    """RTC only: assumed ratio of data to observation noise scale."""
 
     # Server configs
     host: str = "0.0.0.0"
@@ -88,14 +115,53 @@ class ServerConfig:
     """Whether to use the sim policy wrapper"""
 
 
+def _build_default_options(config: "ServerConfig") -> dict | None:
+    """Turn the prefix-consistent chunking flags into policy default options."""
+    if config.smooth_option is None:
+        return None
+    if config.smooth_option not in SMOOTH_OPTIONS:
+        raise ValueError(
+            f"--smooth-option must be one of {SMOOTH_OPTIONS}, got {config.smooth_option!r}."
+        )
+    if config.execution_horizon is None:
+        raise ValueError(
+            "--execution-horizon is required when --smooth-option is set: it sets how far "
+            "the previous chunk is shifted between calls and where the prefix blend ends. "
+            "Use the number of steps the robot actually executes per inference."
+        )
+    if config.execution_horizon <= 0:
+        raise ValueError(f"--execution-horizon must be positive; got {config.execution_horizon}.")
+
+    options = {
+        "smooth_option": config.smooth_option,
+        "execution_horizon": config.execution_horizon,
+        "prefix_attention_schedule": config.prefix_attention_schedule,
+        "max_guidance_weight": config.max_guidance_weight,
+        "sigma_d_o": config.sigma_d_o,
+    }
+    # Leave these out when unset so the policy applies its own defaults.
+    for key in ("inference_delay", "prefix_attention_horizon", "actual_action_dim"):
+        value = getattr(config, key)
+        if value is not None:
+            options[key] = value
+    return options
+
+
 def main(config: ServerConfig):
     config.embodiment_tag = EmbodimentTag.resolve(config.embodiment_tag)
+    default_options = _build_default_options(config)
     print("Starting GR00T inference server...")
     print(f"  Embodiment tag: {config.embodiment_tag}")
     print(f"  Model path: {config.model_path}")
     print(f"  Device: {config.device}")
     print(f"  Host: {config.host}")
     print(f"  Port: {config.port}")
+    if default_options is not None:
+        print(f"  Prefix-consistent chunking: {default_options}")
+        print(
+            "  NOTE: the previous action chunk is per-server state. Serve one robot "
+            "per server, and have the client call reset() at each episode start."
+        )
 
     # Create and start the server
     if config.model_path is not None:
@@ -107,8 +173,14 @@ def main(config: ServerConfig):
             model_path=config.model_path,
             device=config.device,
             strict=config.strict,
+            default_options=default_options,
         )
     elif config.dataset_path is not None:
+        if default_options is not None:
+            raise ValueError(
+                "--smooth-option applies to a model policy; it has no effect with "
+                "--dataset-path (ReplayPolicy replays recorded actions)."
+            )
         if config.execution_horizon is None:
             raise ValueError(
                 "--execution-horizon is required when --dataset-path is set "
