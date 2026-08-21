@@ -180,6 +180,15 @@ em { font-style: italic; }
   padding: 6px 14px; margin-bottom: 26px; background: var(--surface); white-space: nowrap;
 }
 .hero__tag b { color: var(--accent); font-weight: 600; }
+.hero__tag + .hero__tag { margin-left: 8px; }
+.hero__tag--spotlight {
+  color: var(--accent-deep);
+  background: var(--accent-tint);
+  border-color: var(--accent-tint-2);
+  white-space: normal;
+}
+.hero__tag--spotlight b { letter-spacing: 0.08em; text-transform: uppercase; }
+.hero__tag--spotlight .star { color: var(--accent); font-size: 13px; line-height: 1; }
 .hero h1 {
   font-size: clamp(38px, 7vw, 78px);
   line-height: 0.98; letter-spacing: -0.02em; font-weight: 500;

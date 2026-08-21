@@ -2,6 +2,8 @@
 
 **PAINT** (Prefix-Anchored INiTial Noise) — training-free asynchronous execution of action-chunking robot policies via initial noise selection.
 
+> ★ **Spotlight** — RSS 2026 Workshop on Diffusion for Robot Learning
+>
 > Under Review · arXiv:2606.19774
 
 ---
