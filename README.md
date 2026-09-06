@@ -2,9 +2,11 @@
 
 **PAINT** (Prefix-Anchored INiTial Noise) — training-free asynchronous execution of action-chunking robot policies via initial noise selection.
 
-> ★ **Spotlight** — RSS 2026 Workshop on Diffusion for Robot Learning
+> ★ **Accepted** — CoRL 2026
 >
-> Under Review · arXiv:2606.19774
+> ★ **Spotlight** — Diff4RL @ RSS 2026
+>
+> arXiv:2606.19774
 
 ---
 
@@ -44,14 +46,13 @@ Evaluated on **12 Kinetix simulation environments** and **6 real-world tasks** a
 
 PAINT matches or exceeds RTC (gradient-based steering) on success rate and prefix consistency across GR00T-N1.5 and π₀ backbones — while never modifying the policy's velocity field.
 
-
 ## Citation
 
 ```bibtex
-@article{ho2026start,
+@inproceedings{ho2026start,
   title={Start Right, Arrive Right: Asynchronous Execution via Initial Noise Selection},
   author={Ho, Trong-Bao and Nguyen, Quang-Tan and Ha, Thien-Loc and Nguyen, Gia-Binh and Nguyen, Viet-Thanh and Dinh, Long and Vu, Minh N and Nguyen, Duy MH and Le, An Thai and Vien, Ngo Anh},
-  journal={arXiv preprint arXiv:2606.19774},
+  booktitle={Conference on Robot Learning (CoRL)},
   year={2026}
 }
 ```
